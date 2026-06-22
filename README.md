@@ -38,3 +38,13 @@ npm test
 npm run typecheck
 npm run build
 ```
+
+## Dev invite code
+
+After running backend migrations, seed a reusable invite code for local testing:
+
+```powershell
+.\scripts\dev-seed-invite.ps1
+```
+
+Use `ALPHA-1` in the client registration form.
