@@ -18,4 +18,5 @@ urlpatterns = [
     path("api/customers/<int:customer_id>/", views.customer_detail, name="customer_detail"),
     path("api/assets/", views.assets, name="assets"),
     path("api/assets/<int:asset_id>/delete/", views.asset_delete, name="asset_delete"),
+    path("api/assets/<int:asset_id>/tags/", views.asset_tags, name="asset_tags"),
 ]

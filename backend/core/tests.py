@@ -474,3 +474,48 @@ class AssetLibraryTests(TestCase):
         asset = Asset.objects.create(workspace=workspace, uploaded_by=user, filename="out.mp4", content_type="video/mp4", asset_type=Asset.OUTPUT, object_key="out")
 
         self.assertEqual(asset.retention_days, 90)
+
+
+class AssetTaggingTests(TestCase):
+    def test_asset_upload_gets_fake_vision_suggestions_and_user_can_correct_tags(self):
+        user, _ = make_user_workspace()
+        token = AuthToken.issue_for(user)
+
+        response = self.client.post(
+            "/api/assets/",
+            data={"filename": "storefront-product.jpg", "content_type": "image/jpeg"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        asset = response.json()["asset"]
+        self.assertEqual(asset["suggested_tags"], ["product", "storefront"])
+        self.assertEqual(asset["tags"], ["product", "storefront"])
+
+        response = self.client.post(
+            f"/api/assets/{asset['id']}/tags/",
+            data={"tags": ["price", "detail"]},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["tags"], ["price", "detail"])
+
+        response = self.client.get("/api/assets/", HTTP_AUTHORIZATION=f"Bearer {token}")
+        self.assertEqual(response.json()["assets"][0]["tags"], ["price", "detail"])
+
+    def test_asset_tags_reject_unsupported_values(self):
+        user, workspace = make_user_workspace()
+        asset = Asset.objects.create(workspace=workspace, uploaded_by=user, filename="clip.mp4", content_type="video/mp4", asset_type=Asset.VIDEO, object_key="clip")
+        token = AuthToken.issue_for(user)
+
+        response = self.client.post(
+            f"/api/assets/{asset.id}/tags/",
+            data={"tags": ["not-a-tag"]},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+
+        self.assertEqual(response.status_code, 400)

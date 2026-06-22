@@ -15,6 +15,7 @@ import {
   registerWithInvite,
   saveCustomer,
   submitCreditTask,
+  updateAssetTags,
 } from "./api";
 
 describe("fetchHealth", () => {
@@ -223,5 +224,21 @@ describe("asset API helpers", () => {
       method: "POST",
       headers: { Authorization: "Bearer abc" },
     });
+  });
+
+  it("updates corrected asset tags", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: 1, tags: ["price", "detail"] }),
+    });
+
+    const result = await updateAssetTags("http://127.0.0.1:8000", "abc", 1, ["price", "detail"], fetchMock);
+
+    expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:8000/api/assets/1/tags/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer abc" },
+      body: JSON.stringify({ tags: ["price", "detail"] }),
+    });
+    expect(result.tags).toEqual(["price", "detail"]);
   });
 });

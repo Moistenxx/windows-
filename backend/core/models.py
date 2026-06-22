@@ -193,6 +193,8 @@ class Asset(models.Model):
     asset_type = models.CharField(max_length=20, choices=TYPE_CHOICES)
     object_key = models.CharField(max_length=320, unique=True)
     retention_days = models.PositiveIntegerField(default=30)
+    suggested_tags = models.JSONField(default=list, blank=True)
+    tags = models.JSONField(default=list, blank=True)
     expires_at = models.DateTimeField()
     deleted_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -217,6 +219,8 @@ class Asset(models.Model):
             "asset_type": self.asset_type,
             "object_key": self.object_key,
             "retention_days": self.retention_days,
+            "suggested_tags": self.suggested_tags,
+            "tags": self.tags,
             "expires_at": self.expires_at.isoformat(),
             "deleted": self.deleted_at is not None,
         }

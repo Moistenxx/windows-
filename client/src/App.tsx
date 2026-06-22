@@ -16,6 +16,7 @@ import {
   registerWithInvite,
   saveCustomer,
   submitCreditTask,
+  updateAssetTags,
   type AiProvider,
   type Asset,
   type AuthPayload,
@@ -236,6 +237,17 @@ export function App() {
     setAssets({ status: "ready", assets: assets.assets.filter((asset) => asset.id !== assetId), message: "素材已删除" });
   }
 
+  async function saveAssetTags(assetId: number, value: string) {
+    if (auth.status !== "authenticated" || assets.status !== "ready") return;
+    const tags = value.split(",").map((tag) => tag.trim()).filter(Boolean);
+    const saved = await updateAssetTags(apiBase, auth.token, assetId, tags);
+    setAssets({
+      status: "ready",
+      assets: assets.assets.map((asset) => asset.id === assetId ? saved : asset),
+      message: "标签已更新",
+    });
+  }
+
   return (
     <main className="app-shell">
       <section className="hero-card">
@@ -318,7 +330,15 @@ export function App() {
                   <ul className="workspace-list">
                     {assets.assets.map((asset) => (
                       <li key={asset.id}>
-                        {asset.filename} <span>{asset.asset_type} · {asset.retention_days}天</span>
+                        <div>
+                          {asset.filename} <span>{asset.asset_type} · {asset.retention_days}天</span>
+                          <p>建议：{asset.suggested_tags?.join(", ") || "无"} / 当前：{asset.tags?.join(", ") || "无"}</p>
+                          <input
+                            defaultValue={asset.tags?.join(", ") ?? ""}
+                            placeholder="product, storefront"
+                            onBlur={(event) => saveAssetTags(asset.id, event.target.value)}
+                          />
+                        </div>
                         <button className="mini-action" onClick={() => removeAsset(asset.id)}>删除</button>
                       </li>
                     ))}

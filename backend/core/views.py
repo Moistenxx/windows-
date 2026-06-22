@@ -328,12 +328,40 @@ ASSET_TYPES = {
     "wav": (Asset.AUDIO, "audio/wav"),
 }
 
+ASSET_TAGS = ["product", "person", "environment", "price", "process", "comparison", "certificate", "storefront", "detail"]
+
 
 def asset_type_for(filename, content_type):
     asset = ASSET_TYPES.get(PurePath(filename).suffix.lower().lstrip("."))
     if not asset or asset[1] != content_type:
         raise ValueError("Supported files: MP4/MOV, JPG/PNG/WEBP, MP3/WAV")
     return asset[0]
+
+
+def fake_vision_tags(filename):
+    lower = filename.lower()
+    tags = [tag for tag in ASSET_TAGS if tag in lower]
+    if "people" in lower or "person" in lower:
+        tags.append("person")
+    if "store" in lower or "shop" in lower:
+        tags.append("storefront")
+    if "close" in lower:
+        tags.append("detail")
+    # ponytail: filename heuristic only; replace with real vision provider when provider jobs exist.
+    return list(dict.fromkeys(tags or ["product"]))
+
+
+def clean_asset_tags(raw_tags):
+    if not isinstance(raw_tags, list):
+        raise ValueError("tags must be a list")
+    tags = []
+    for tag in raw_tags:
+        tag = str(tag).strip()
+        if tag not in ASSET_TAGS:
+            raise ValueError("Unsupported asset tag")
+        if tag not in tags:
+            tags.append(tag)
+    return tags
 
 
 @csrf_exempt
@@ -354,6 +382,7 @@ def assets(request):
         asset_type = asset_type_for(filename, content_type)
     except ValueError as exc:
         return error(str(exc))
+    suggested_tags = fake_vision_tags(filename)
     asset = Asset.objects.create(
         workspace=workspace,
         uploaded_by=user,
@@ -361,6 +390,8 @@ def assets(request):
         content_type=content_type,
         asset_type=asset_type,
         object_key=Asset.new_object_key(workspace, filename),
+        suggested_tags=suggested_tags,
+        tags=suggested_tags,
     )
     return JsonResponse(
         {
@@ -389,4 +420,23 @@ def asset_delete(request, asset_id):
         return error("Asset not found", status=404)
     asset.deleted_at = timezone.now()
     asset.save(update_fields=["deleted_at"])
+    return JsonResponse(asset.public_payload())
+
+
+@csrf_exempt
+def asset_tags(request, asset_id):
+    if request.method != "POST":
+        return error("POST required", status=405)
+    user, auth_error = require_user(request)
+    if auth_error:
+        return auth_error
+    workspace = first_membership(user).workspace
+    try:
+        asset = Asset.objects.get(id=asset_id, workspace=workspace, deleted_at__isnull=True)
+        asset.tags = clean_asset_tags(read_json(request).get("tags"))
+    except Asset.DoesNotExist:
+        return error("Asset not found", status=404)
+    except ValueError as exc:
+        return error(str(exc))
+    asset.save(update_fields=["tags"])
     return JsonResponse(asset.public_payload())

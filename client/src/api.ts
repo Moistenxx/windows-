@@ -61,6 +61,8 @@ export type Asset = {
   asset_type?: string;
   object_key?: string;
   retention_days?: number;
+  suggested_tags?: string[];
+  tags?: string[];
   expires_at?: string;
   deleted?: boolean;
 };
@@ -299,6 +301,24 @@ export async function deleteAsset(
   const response = await fetcher<Asset>(apiUrl(apiBase, `/api/assets/${assetId}/delete/`), {
     method: "POST",
     headers: { Authorization: `Bearer ${token}` },
+  });
+  return readJson(response);
+}
+
+export async function updateAssetTags(
+  apiBase: string,
+  token: string,
+  assetId: number,
+  tags: string[],
+  fetcher: Fetcher = fetch,
+): Promise<Asset> {
+  const response = await fetcher<Asset>(apiUrl(apiBase, `/api/assets/${assetId}/tags/`), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ tags }),
   });
   return readJson(response);
 }
