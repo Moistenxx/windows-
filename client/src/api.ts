@@ -73,6 +73,21 @@ export type AssetUploadPayload = {
   upload: { method: string; url: string; headers: Record<string, string> };
 };
 
+export type IndustryTemplate = { id: number; name: string; industry?: string; prompt?: string };
+export type ViralSample = {
+  id?: number;
+  scope?: string;
+  workspace_id?: number;
+  customer_id?: number;
+  title?: string;
+  source_url?: string;
+  copy: string;
+  structure_analysis?: string;
+  tags?: string[];
+  rewrite?: string;
+};
+export type ScriptAssetsPayload = { templates: IndustryTemplate[]; samples: ViralSample[] };
+
 export type AuthPayload = {
   token: string;
   user: { id?: number; email: string };
@@ -319,6 +334,34 @@ export async function updateAssetTags(
       Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify({ tags }),
+  });
+  return readJson(response);
+}
+
+export async function fetchScriptAssets(
+  apiBase: string,
+  token: string,
+  fetcher: Fetcher = fetch,
+): Promise<ScriptAssetsPayload> {
+  const response = await fetcher<ScriptAssetsPayload>(apiUrl(apiBase, "/api/script-assets/"), {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return readJson(response);
+}
+
+export async function saveViralSample(
+  apiBase: string,
+  token: string,
+  input: ViralSample,
+  fetcher: Fetcher = fetch,
+): Promise<ViralSample> {
+  const response = await fetcher<ViralSample>(apiUrl(apiBase, "/api/viral-samples/"), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(input),
   });
   return readJson(response);
 }

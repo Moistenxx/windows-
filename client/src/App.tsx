@@ -1,4 +1,4 @@
-﻿import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 
 import {
   createAssetUpload,
@@ -11,10 +11,12 @@ import {
   fetchCredits,
   fetchCustomers,
   fetchHealth,
+  fetchScriptAssets,
   fetchMe,
   login,
   registerWithInvite,
   saveCustomer,
+  saveViralSample,
   submitCreditTask,
   updateAssetTags,
   type AiProvider,
@@ -23,7 +25,9 @@ import {
   type CreditPayload,
   type CustomerProfile,
   type HealthPayload,
+  type IndustryTemplate,
   type MePayload,
+  type ViralSample,
 } from "./api";
 import "./styles.css";
 
@@ -59,6 +63,12 @@ type AssetState =
   | { status: "ready"; assets: Asset[]; message?: string }
   | { status: "error"; message: string };
 
+type ScriptAssetState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "ready"; templates: IndustryTemplate[]; samples: ViralSample[]; selectedTemplateId: number | null; message?: string }
+  | { status: "error"; message: string };
+
 type AuthState =
   | { status: "anonymous" }
   | { status: "loading" }
@@ -85,7 +95,9 @@ export function App() {
   const [providers, setProviders] = useState<ProviderState>({ status: "idle" });
   const [customers, setCustomers] = useState<CustomerState>({ status: "idle" });
   const [assets, setAssets] = useState<AssetState>({ status: "idle" });
+  const [scriptAssets, setScriptAssets] = useState<ScriptAssetState>({ status: "idle" });
   const [customerForm, setCustomerForm] = useState<CustomerProfile>({ name: "", industry: "", products: "", selling_points: "" });
+  const [sampleForm, setSampleForm] = useState({ source_url: "", copy: "", tags: "" });
   const [taskMessage, setTaskMessage] = useState("");
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("owner@example.com");
@@ -129,6 +141,7 @@ export function App() {
       setProviders({ status: "idle" });
       setCustomers({ status: "idle" });
       setAssets({ status: "idle" });
+      setScriptAssets({ status: "idle" });
       return;
     }
     setCredits({ status: "loading" });
@@ -158,6 +171,15 @@ export function App() {
     fetchAssets(apiBase, auth.token)
       .then((payload) => setAssets({ status: "ready", assets: payload.assets }))
       .catch((error) => setAssets({ status: "error", message: error instanceof Error ? error.message : "Asset load failed" }));
+    setScriptAssets({ status: "loading" });
+    fetchScriptAssets(apiBase, auth.token)
+      .then((payload) => setScriptAssets({
+        status: "ready",
+        templates: payload.templates,
+        samples: payload.samples,
+        selectedTemplateId: payload.templates[0]?.id ?? null,
+      }))
+      .catch((error) => setScriptAssets({ status: "error", message: error instanceof Error ? error.message : "Script asset load failed" }));
   }, [auth]);
 
   async function submit(event: FormEvent) {

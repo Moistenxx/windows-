@@ -11,9 +11,11 @@ import {
   fetchCustomers,
   fetchHealth,
   fetchMe,
+  fetchScriptAssets,
   login,
   registerWithInvite,
   saveCustomer,
+  saveViralSample,
   submitCreditTask,
   updateAssetTags,
 } from "./api";
@@ -240,5 +242,36 @@ describe("asset API helpers", () => {
       body: JSON.stringify({ tags: ["price", "detail"] }),
     });
     expect(result.tags).toEqual(["price", "detail"]);
+  });
+});
+
+describe("script asset API helpers", () => {
+  it("fetches industry templates and viral samples", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ templates: [{ id: 1, name: "Jewelry" }], samples: [{ id: 2, copy: "hook" }] }),
+    });
+
+    const result = await fetchScriptAssets("http://127.0.0.1:8000", "abc", fetchMock);
+
+    expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:8000/api/script-assets/", {
+      headers: { Authorization: "Bearer abc" },
+    });
+    expect(result.templates[0].name).toBe("Jewelry");
+  });
+
+  it("saves a private viral sample", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: 1, scope: "workspace", copy: "viral" }),
+    });
+
+    await saveViralSample("http://127.0.0.1:8000", "abc", { customer_id: 1, copy: "viral" }, fetchMock);
+
+    expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:8000/api/viral-samples/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer abc" },
+      body: JSON.stringify({ customer_id: 1, copy: "viral" }),
+    });
   });
 });

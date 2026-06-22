@@ -4,7 +4,7 @@ from pathlib import PurePath
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError
-from django.core.validators import validate_email
+from django.core.validators import URLValidator, validate_email
 from django.db import transaction
 from django.http import JsonResponse
 from django.utils import timezone
@@ -18,7 +18,9 @@ from .models import (
     CreditTask,
     CustomerProfile,
     InsufficientCredits,
+    IndustryTemplate,
     InvitationCode,
+    ViralSample,
     Workspace,
     WorkspaceMembership,
 )
@@ -440,3 +442,58 @@ def asset_tags(request, asset_id):
         return error(str(exc))
     asset.save(update_fields=["tags"])
     return JsonResponse(asset.public_payload())
+
+
+def script_assets(request):
+    user, auth_error = require_user(request)
+    if auth_error:
+        return auth_error
+    workspace = first_membership(user).workspace
+    templates = IndustryTemplate.objects.filter(enabled=True).order_by("industry", "id")
+    samples = ViralSample.objects.filter(scope=ViralSample.SYSTEM) | ViralSample.objects.filter(workspace=workspace)
+    return JsonResponse(
+        {
+            "templates": [template.public_payload() for template in templates],
+            "samples": [sample.public_payload() for sample in samples.order_by("-created_at", "id")],
+        }
+    )
+
+
+@csrf_exempt
+def viral_samples(request):
+    if request.method != "POST":
+        return error("POST required", status=405)
+    user, auth_error = require_user(request)
+    if auth_error:
+        return auth_error
+    workspace = first_membership(user).workspace
+    data = read_json(request)
+    copy = str(data.get("copy") or "").strip()
+    source_url = str(data.get("source_url") or "").strip()
+    if not copy:
+        return error("Copy required")
+    if source_url:
+        try:
+            URLValidator()(source_url)
+        except ValidationError:
+            return error("Valid source_url required")
+    customer = None
+    customer_id = data.get("customer_id")
+    if customer_id:
+        try:
+            customer = CustomerProfile.objects.get(id=int(customer_id), workspace=workspace)
+        except (CustomerProfile.DoesNotExist, TypeError, ValueError):
+            return error("Valid customer_id required")
+    tags = data.get("tags") if isinstance(data.get("tags"), list) else []
+    sample = ViralSample.objects.create(
+        scope=ViralSample.WORKSPACE,
+        workspace=workspace,
+        customer=customer,
+        title=str(data.get("title") or "")[:160],
+        source_url=source_url,
+        copy=copy,
+        structure_analysis=str(data.get("structure_analysis") or "hook-offer-cta").strip(),
+        tags=[str(tag).strip() for tag in tags if str(tag).strip()],
+        rewrite=str(data.get("rewrite") or "").strip(),
+    )
+    return JsonResponse(sample.public_payload(), status=201)

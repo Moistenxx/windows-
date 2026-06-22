@@ -179,6 +179,60 @@ class CustomerProfile(models.Model):
         return f"{self.workspace.name} {self.name}"
 
 
+class IndustryTemplate(models.Model):
+    name = models.CharField(max_length=120)
+    industry = models.CharField(max_length=120)
+    prompt = models.TextField(blank=True)
+    enabled = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def public_payload(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "industry": self.industry,
+            "prompt": self.prompt,
+        }
+
+    def __str__(self):
+        return f"{self.industry} {self.name}"
+
+
+class ViralSample(models.Model):
+    SYSTEM = "system"
+    WORKSPACE = "workspace"
+    SCOPE_CHOICES = [(SYSTEM, "System"), (WORKSPACE, "Workspace")]
+
+    scope = models.CharField(max_length=20, choices=SCOPE_CHOICES, default=WORKSPACE)
+    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, null=True, blank=True, related_name="viral_samples")
+    customer = models.ForeignKey(CustomerProfile, on_delete=models.SET_NULL, null=True, blank=True, related_name="viral_samples")
+    title = models.CharField(max_length=160, blank=True)
+    source_url = models.URLField(blank=True)
+    copy = models.TextField()
+    structure_analysis = models.TextField(blank=True)
+    tags = models.JSONField(default=list, blank=True)
+    rewrite = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def public_payload(self):
+        return {
+            "id": self.id,
+            "scope": self.scope,
+            "workspace_id": self.workspace_id,
+            "customer_id": self.customer_id,
+            "title": self.title,
+            "source_url": self.source_url,
+            "copy": self.copy,
+            "structure_analysis": self.structure_analysis,
+            "tags": self.tags,
+            "rewrite": self.rewrite,
+        }
+
+    def __str__(self):
+        return self.title or self.copy[:40]
+
+
 class Asset(models.Model):
     VIDEO = "video"
     IMAGE = "image"

@@ -9,7 +9,9 @@ from .models import (
     CreditLedgerEntry,
     CreditRecharge,
     CreditTask,
+    IndustryTemplate,
     InvitationCode,
+    ViralSample,
     Workspace,
     WorkspaceMembership,
 )
@@ -54,6 +56,20 @@ class CustomerProfileAdmin(admin.ModelAdmin):
     list_display = ("workspace", "name", "industry", "updated_at")
     search_fields = ("workspace__name", "name", "industry", "products", "selling_points")
     readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(IndustryTemplate)
+class IndustryTemplateAdmin(admin.ModelAdmin):
+    list_display = ("name", "industry", "enabled", "updated_at")
+    list_filter = ("enabled", "industry")
+    search_fields = ("name", "industry", "prompt")
+
+
+@admin.register(ViralSample)
+class ViralSampleAdmin(admin.ModelAdmin):
+    list_display = ("title", "scope", "workspace", "customer", "source_url", "created_at")
+    list_filter = ("scope",)
+    search_fields = ("title", "copy", "source_url", "tags")
 
 
 @admin.register(Asset)

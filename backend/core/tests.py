@@ -7,6 +7,8 @@ from core.models import (
     Asset,
     AuthToken,
     CustomerProfile,
+    IndustryTemplate,
+    ViralSample,
     CreditAccount,
     CreditLedgerEntry,
     CreditRecharge,
@@ -56,6 +58,8 @@ class AdminEntryTests(TestCase):
         self.assertTrue(admin.site.is_registered(AIProvider))
         self.assertTrue(admin.site.is_registered(CustomerProfile))
         self.assertTrue(admin.site.is_registered(Asset))
+        self.assertTrue(admin.site.is_registered(IndustryTemplate))
+        self.assertTrue(admin.site.is_registered(ViralSample))
 
 
 class AuthApiTests(TestCase):
@@ -519,3 +523,72 @@ class AssetTaggingTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 400)
+
+
+class TemplateAndViralSampleTests(TestCase):
+    def test_user_can_list_enabled_templates_and_system_samples(self):
+        user, _ = make_user_workspace()
+        token = AuthToken.issue_for(user)
+        template = IndustryTemplate.objects.create(name="Jewelry", industry="jewelry", prompt="sell gold", enabled=True)
+        IndustryTemplate.objects.create(name="Disabled", industry="x", enabled=False)
+        ViralSample.objects.create(scope=ViralSample.SYSTEM, title="System Hook", copy="3 seconds hook", structure_analysis="hook-offer-cta", tags=["hook"])
+
+        response = self.client.get("/api/script-assets/", HTTP_AUTHORIZATION=f"Bearer {token}")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["templates"], [template.public_payload()])
+        self.assertEqual(payload["samples"][0]["title"], "System Hook")
+        self.assertEqual(payload["samples"][0]["copy"], "3 seconds hook")
+
+    def test_user_can_add_customer_private_sample_from_douyin_link_or_pasted_copy(self):
+        user, workspace = make_user_workspace()
+        customer = CustomerProfile.objects.create(workspace=workspace, name="Acme")
+        token = AuthToken.issue_for(user)
+
+        response = self.client.post(
+            "/api/viral-samples/",
+            data={
+                "customer_id": customer.id,
+                "source_url": "https://www.douyin.com/video/123",
+                "copy": "viral copy",
+                "tags": ["hook", "price"],
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        payload = response.json()
+        self.assertEqual(payload["scope"], "workspace")
+        self.assertEqual(payload["source_url"], "https://www.douyin.com/video/123")
+        self.assertEqual(payload["copy"], "viral copy")
+        self.assertEqual(payload["tags"], ["hook", "price"])
+        self.assertNotIn("video_file", payload)
+
+        response = self.client.post(
+            "/api/viral-samples/",
+            data={"customer_id": customer.id, "copy": "manual paste only"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+        self.assertEqual(response.status_code, 201)
+
+        response = self.client.post(
+            "/api/viral-samples/",
+            data={"customer_id": customer.id, "source_url": "not-a-url", "copy": "bad"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_private_samples_are_workspace_scoped(self):
+        user, workspace = make_user_workspace()
+        other_user, other_workspace = make_user_workspace("sample-other@example.com")
+        ViralSample.objects.create(scope=ViralSample.WORKSPACE, workspace=other_workspace, title="Other", copy="hidden")
+        token = AuthToken.issue_for(user)
+
+        response = self.client.get("/api/script-assets/", HTTP_AUTHORIZATION=f"Bearer {token}")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["samples"], [])
