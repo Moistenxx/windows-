@@ -1,6 +1,6 @@
 ﻿import { describe, expect, it, vi } from "vitest";
 
-import { fetchCredits, fetchHealth, fetchMe, login, registerWithInvite, submitCreditTask } from "./api";
+import { estimateAiCredits, fetchAiProviders, fetchCredits, fetchHealth, fetchMe, login, registerWithInvite, submitCreditTask } from "./api";
 
 describe("fetchHealth", () => {
   it("reads backend health JSON from the configured API base", async () => {
@@ -104,5 +104,37 @@ describe("credit API helpers", () => {
       body: JSON.stringify({ title: "test render", estimated_credits: 120 }),
     });
     expect(result.credits).toEqual({ workspace_id: 1, balance: 380, frozen: 120 });
+  });
+});
+
+describe("AI provider API helpers", () => {
+  it("fetches enabled providers without secrets", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ providers: [{ id: 1, capability: "llm", name: "Volcengine", model_name: "doubao", price_coefficient: "2.00" }] }),
+    });
+
+    const result = await fetchAiProviders("http://127.0.0.1:8000", "abc", fetchMock);
+
+    expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:8000/api/ai/providers/", {
+      headers: { Authorization: "Bearer abc" },
+    });
+    expect(JSON.stringify(result)).not.toContain("api_key");
+  });
+
+  it("estimates credits with the selected provider", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ provider_id: 1, estimated_credits: 100 }),
+    });
+
+    const result = await estimateAiCredits("http://127.0.0.1:8000", "abc", 1, 40, fetchMock);
+
+    expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:8000/api/ai/estimate/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer abc" },
+      body: JSON.stringify({ provider_id: 1, base_credits: 40 }),
+    });
+    expect(result.estimated_credits).toBe(100);
   });
 });

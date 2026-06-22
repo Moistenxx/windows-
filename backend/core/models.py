@@ -1,5 +1,6 @@
 import hashlib
 import secrets
+from decimal import Decimal, ROUND_HALF_UP
 
 from django.contrib.auth.models import User
 from django.core.validators import MinValueValidator
@@ -94,6 +95,53 @@ class AuthToken(models.Model):
 
     def __str__(self):
         return f"token for {self.user.username}"
+
+
+class AIProvider(models.Model):
+    LLM = "llm"
+    TTS = "tts"
+    ASR = "asr"
+    VISION = "vision"
+    VIDEO = "video"
+    CAPABILITY_CHOICES = [
+        (LLM, "LLM"),
+        (TTS, "TTS"),
+        (ASR, "ASR"),
+        (VISION, "Vision"),
+        (VIDEO, "Video"),
+    ]
+
+    capability = models.CharField(max_length=20, choices=CAPABILITY_CHOICES)
+    name = models.CharField(max_length=120)
+    model_name = models.CharField(max_length=120)
+    api_key = models.CharField(max_length=240, blank=True)
+    enabled = models.BooleanField(default=False)
+    price_coefficient = models.DecimalField(
+        max_digits=6,
+        decimal_places=2,
+        default=Decimal("1.00"),
+        validators=[MinValueValidator(Decimal("0.01"))],
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def estimate_credits(self, base_credits):
+        require_positive_credits(base_credits)
+        return int((Decimal(base_credits) * self.price_coefficient).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+    def fake_call(self, prompt):
+        return f"{self.model_name} generated: {prompt}"
+
+    def public_payload(self):
+        return {
+            "id": self.id,
+            "capability": self.capability,
+            "name": self.name,
+            "model_name": self.model_name,
+            "price_coefficient": f"{self.price_coefficient:.2f}",
+        }
+
+    def __str__(self):
+        return f"{self.capability} {self.name} ({self.model_name})"
 
 
 class CreditAccount(models.Model):

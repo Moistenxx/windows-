@@ -26,6 +26,17 @@ export type CreditTaskPayload = {
   credits: CreditPayload;
 };
 
+export type AiProvider = {
+  id: number;
+  capability: string;
+  name: string;
+  model_name: string;
+  price_coefficient: string;
+};
+
+export type AiProvidersPayload = { providers: AiProvider[] };
+export type AiEstimatePayload = { provider_id: number; estimated_credits: number };
+
 export type AuthPayload = {
   token: string;
   user: { id?: number; email: string };
@@ -138,6 +149,35 @@ export async function submitCreditTask(
       title: input.title,
       estimated_credits: input.estimatedCredits,
     }),
+  });
+  return readJson(response);
+}
+
+export async function fetchAiProviders(
+  apiBase: string,
+  token: string,
+  fetcher: Fetcher = fetch,
+): Promise<AiProvidersPayload> {
+  const response = await fetcher<AiProvidersPayload>(apiUrl(apiBase, "/api/ai/providers/"), {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return readJson(response);
+}
+
+export async function estimateAiCredits(
+  apiBase: string,
+  token: string,
+  providerId: number,
+  baseCredits: number,
+  fetcher: Fetcher = fetch,
+): Promise<AiEstimatePayload> {
+  const response = await fetcher<AiEstimatePayload>(apiUrl(apiBase, "/api/ai/estimate/"), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ provider_id: providerId, base_credits: baseCredits }),
   });
   return readJson(response);
 }

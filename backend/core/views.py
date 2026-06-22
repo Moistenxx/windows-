@@ -9,6 +9,7 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
 from .models import (
+    AIProvider,
     AuthToken,
     CreditAccount,
     CreditTask,
@@ -194,3 +195,51 @@ def credit_tasks(request):
         },
         status=201,
     )
+
+
+def require_user(request):
+    user = bearer_user(request)
+    if user is None:
+        return None, error("Authentication required", status=401)
+    if first_membership(user) is None:
+        return None, error("Workspace required", status=409)
+    return user, None
+
+
+def ai_providers(request):
+    _, auth_error = require_user(request)
+    if auth_error:
+        return auth_error
+    providers = AIProvider.objects.filter(enabled=True).order_by("capability", "id")
+    return JsonResponse({"providers": [provider.public_payload() for provider in providers]})
+
+
+@csrf_exempt
+def ai_estimate(request):
+    if request.method != "POST":
+        return error("POST required", status=405)
+    _, auth_error = require_user(request)
+    if auth_error:
+        return auth_error
+    data = read_json(request)
+    try:
+        provider = AIProvider.objects.get(id=int(data.get("provider_id")), enabled=True)
+        estimated_credits = provider.estimate_credits(int(data.get("base_credits", 0)))
+    except (AIProvider.DoesNotExist, TypeError, ValueError):
+        return error("Valid provider_id and positive base_credits required")
+    return JsonResponse({"provider_id": provider.id, "estimated_credits": estimated_credits})
+
+
+@csrf_exempt
+def ai_fake_call(request):
+    if request.method != "POST":
+        return error("POST required", status=405)
+    _, auth_error = require_user(request)
+    if auth_error:
+        return auth_error
+    data = read_json(request)
+    try:
+        provider = AIProvider.objects.get(id=int(data.get("provider_id")), enabled=True)
+    except (AIProvider.DoesNotExist, TypeError, ValueError):
+        return error("Valid provider_id required")
+    return JsonResponse({"provider_id": provider.id, "output": provider.fake_call(data.get("prompt", ""))})

@@ -2,12 +2,15 @@
 
 import {
   defaultApiBase,
+  estimateAiCredits,
+  fetchAiProviders,
   fetchCredits,
   fetchHealth,
   fetchMe,
   login,
   registerWithInvite,
   submitCreditTask,
+  type AiProvider,
   type AuthPayload,
   type CreditPayload,
   type HealthPayload,
@@ -27,6 +30,12 @@ type CreditState =
   | { status: "idle" }
   | { status: "loading" }
   | { status: "ready"; payload: CreditPayload }
+  | { status: "error"; message: string };
+
+type ProviderState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "ready"; providers: AiProvider[]; selectedId: number | null; estimate?: number }
   | { status: "error"; message: string };
 
 type AuthState =
@@ -52,6 +61,7 @@ export function App() {
   const [health, setHealth] = useState<HealthState>({ status: "loading" });
   const [auth, setAuth] = useState<AuthState>({ status: "anonymous" });
   const [credits, setCredits] = useState<CreditState>({ status: "idle" });
+  const [providers, setProviders] = useState<ProviderState>({ status: "idle" });
   const [taskMessage, setTaskMessage] = useState("");
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("owner@example.com");
@@ -92,12 +102,21 @@ export function App() {
   useEffect(() => {
     if (auth.status !== "authenticated") {
       setCredits({ status: "idle" });
+      setProviders({ status: "idle" });
       return;
     }
     setCredits({ status: "loading" });
     fetchCredits(apiBase, auth.token)
       .then((payload) => setCredits({ status: "ready", payload }))
       .catch((error) => setCredits({ status: "error", message: error instanceof Error ? error.message : "Credit load failed" }));
+    setProviders({ status: "loading" });
+    fetchAiProviders(apiBase, auth.token)
+      .then((payload) => setProviders({
+        status: "ready",
+        providers: payload.providers,
+        selectedId: payload.providers[0]?.id ?? null,
+      }))
+      .catch((error) => setProviders({ status: "error", message: error instanceof Error ? error.message : "Provider load failed" }));
   }, [auth]);
 
   async function submit(event: FormEvent) {
@@ -134,6 +153,13 @@ export function App() {
     } catch (error) {
       setTaskMessage(error instanceof Error ? error.message : "Task submit failed");
     }
+  }
+
+  async function estimateSelectedProvider(providerId: number) {
+    if (auth.status !== "authenticated" || providers.status !== "ready") return;
+    setProviders({ ...providers, selectedId: providerId });
+    const payload = await estimateAiCredits(apiBase, auth.token, providerId, 40);
+    setProviders({ ...providers, selectedId: providerId, estimate: payload.estimated_credits });
   }
 
   return (
@@ -177,6 +203,25 @@ export function App() {
                 {credits.status === "idle" && <p>登录后显示</p>}
                 <button className="mini-action" onClick={submitDemoTask}>提交 120 积分测试任务</button>
                 {taskMessage && <p>{taskMessage}</p>}
+              </div>
+              <div className="credit-card">
+                <b>高级模型</b>
+                {providers.status === "loading" && <p>模型加载中...</p>}
+                {providers.status === "error" && <p>{providers.message}</p>}
+                {providers.status === "ready" && providers.providers.length === 0 && <p>暂无启用模型</p>}
+                {providers.status === "ready" && providers.providers.length > 0 && (
+                  <>
+                    <select value={providers.selectedId ?? ""} onChange={(event) => estimateSelectedProvider(Number(event.target.value))}>
+                      {providers.providers.map((provider) => (
+                        <option key={provider.id} value={provider.id}>
+                          {provider.capability} · {provider.name} · x{provider.price_coefficient}
+                        </option>
+                      ))}
+                    </select>
+                    <button className="mini-action" onClick={() => providers.selectedId && estimateSelectedProvider(providers.selectedId)}>估算 40 基础积分</button>
+                    {providers.estimate !== undefined && <p>预计消耗 {providers.estimate} 积分</p>}
+                  </>
+                )}
               </div>
             </div>
             <button className="ghost" onClick={logout}>退出登录</button>

@@ -49,7 +49,7 @@ After running backend migrations, seed a reusable invite code for local testing:
 .\scripts\dev-seed-invite.ps1
 ```
 
-Use `ALPHA-1` in the client registration form.
+Use `ALPHA-1` in the client registration form. The script also seeds one enabled fake LLM provider for advanced model selection.
 
 ## Dev credits
 

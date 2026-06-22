@@ -1,4 +1,4 @@
-﻿from django.contrib import admin
+from django.contrib import admin
 from django.contrib.auth.models import User
 from django.test import TestCase
 from django.urls import reverse
@@ -9,6 +9,7 @@ from core.models import (
     CreditLedgerEntry,
     CreditRecharge,
     CreditTask,
+    AIProvider,
     InsufficientCredits,
     InvitationCode,
     Workspace,
@@ -50,6 +51,7 @@ class AdminEntryTests(TestCase):
         self.assertTrue(admin.site.is_registered(CreditRecharge))
         self.assertTrue(admin.site.is_registered(CreditLedgerEntry))
         self.assertTrue(admin.site.is_registered(CreditTask))
+        self.assertTrue(admin.site.is_registered(AIProvider))
 
 
 class AuthApiTests(TestCase):
@@ -269,3 +271,74 @@ class CreditLedgerTests(TestCase):
         self.assertEqual(response.status_code, 402)
         self.assertEqual(response.json()["error"], "Insufficient credits")
         self.assertFalse(CreditTask.objects.filter(workspace=workspace).exists())
+
+
+class AIProviderTests(TestCase):
+    def test_enabled_providers_api_never_returns_api_keys(self):
+        user, _ = make_user_workspace()
+        token = AuthToken.issue_for(user)
+        AIProvider.objects.create(
+            capability=AIProvider.LLM,
+            name="Volcengine Script",
+            model_name="doubao-test",
+            api_key="secret-key",
+            price_coefficient=2,
+            enabled=True,
+        )
+        AIProvider.objects.create(capability=AIProvider.TTS, name="disabled", model_name="tts-off", api_key="secret", enabled=False)
+
+        response = self.client.get("/api/ai/providers/", HTTP_AUTHORIZATION=f"Bearer {token}")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {
+                "providers": [
+                    {
+                        "id": AIProvider.objects.get(name="Volcengine Script").id,
+                        "capability": "llm",
+                        "name": "Volcengine Script",
+                        "model_name": "doubao-test",
+                        "price_coefficient": "2.00",
+                    }
+                ]
+            },
+        )
+        self.assertNotIn("secret-key", str(response.json()))
+
+    def test_cost_estimate_uses_selected_model_price_coefficient(self):
+        user, _ = make_user_workspace()
+        token = AuthToken.issue_for(user)
+        provider = AIProvider.objects.create(
+            capability=AIProvider.LLM,
+            name="Volcengine Script",
+            model_name="doubao-test",
+            api_key="secret-key",
+            price_coefficient=2.5,
+            enabled=True,
+        )
+
+        response = self.client.post(
+            "/api/ai/estimate/",
+            data={"provider_id": provider.id, "base_credits": 40},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"provider_id": provider.id, "estimated_credits": 100})
+
+    def test_fake_provider_call_returns_deterministic_output(self):
+        user, _ = make_user_workspace()
+        token = AuthToken.issue_for(user)
+        provider = AIProvider.objects.create(capability=AIProvider.LLM, name="Fake LLM", model_name="fake-llm", enabled=True)
+
+        response = self.client.post(
+            "/api/ai/fake-call/",
+            data={"provider_id": provider.id, "prompt": "gold jewelry"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["output"], "fake-llm generated: gold jewelry")
