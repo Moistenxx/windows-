@@ -8,7 +8,15 @@ from django.db import transaction
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
-from .models import AuthToken, InvitationCode, Workspace, WorkspaceMembership
+from .models import (
+    AuthToken,
+    CreditAccount,
+    CreditTask,
+    InsufficientCredits,
+    InvitationCode,
+    Workspace,
+    WorkspaceMembership,
+)
 
 
 def health(request):
@@ -64,6 +72,24 @@ def bearer_user(request):
     if not header.startswith(prefix):
         return None
     return AuthToken.user_for(header[len(prefix) :].strip())
+
+
+def first_membership(user):
+    return (
+        WorkspaceMembership.objects.select_related("workspace")
+        .filter(user=user)
+        .order_by("id")
+        .first()
+    )
+
+
+def credit_payload(workspace):
+    account = CreditAccount.for_workspace(workspace)
+    return {
+        "workspace_id": workspace.id,
+        "balance": account.balance,
+        "frozen": account.frozen,
+    }
 
 
 @csrf_exempt
@@ -124,3 +150,47 @@ def me(request):
         }
     )
 
+
+def credits(request):
+    user = bearer_user(request)
+    if user is None:
+        return error("Authentication required", status=401)
+    membership = first_membership(user)
+    if membership is None:
+        return error("Workspace required", status=409)
+    return JsonResponse(credit_payload(membership.workspace))
+
+
+@csrf_exempt
+def credit_tasks(request):
+    if request.method != "POST":
+        return error("POST required", status=405)
+    user = bearer_user(request)
+    if user is None:
+        return error("Authentication required", status=401)
+    membership = first_membership(user)
+    if membership is None:
+        return error("Workspace required", status=409)
+
+    data = read_json(request)
+    try:
+        estimated_credits = int(data.get("estimated_credits", 0))
+        title = (data.get("title") or "Paid task").strip()[:160]
+        task = CreditTask.submit(membership.workspace, user, estimated_credits, title=title)
+    except (TypeError, ValueError):
+        return error("Positive estimated_credits required")
+    except InsufficientCredits:
+        return error("Insufficient credits", status=402)
+
+    return JsonResponse(
+        {
+            "task": {
+                "id": task.id,
+                "title": task.title,
+                "status": task.status,
+                "estimated_credits": task.estimated_credits,
+            },
+            "credits": credit_payload(membership.workspace),
+        },
+        status=201,
+    )

@@ -1,4 +1,4 @@
-﻿export type HealthPayload = {
+export type HealthPayload = {
   status: string;
   service: string;
   app: string;
@@ -8,6 +8,22 @@ export type WorkspaceSummary = {
   id: number;
   name: string;
   role?: string;
+};
+
+export type CreditPayload = {
+  workspace_id: number;
+  balance: number;
+  frozen: number;
+};
+
+export type CreditTaskPayload = {
+  task: {
+    id: number;
+    title: string;
+    status: string;
+    estimated_credits: number;
+  };
+  credits: CreditPayload;
 };
 
 export type AuthPayload = {
@@ -91,6 +107,37 @@ export async function fetchMe(
 ): Promise<MePayload> {
   const response = await fetcher<MePayload>(apiUrl(apiBase, "/api/auth/me/"), {
     headers: { Authorization: `Bearer ${token}` },
+  });
+  return readJson(response);
+}
+
+export async function fetchCredits(
+  apiBase: string,
+  token: string,
+  fetcher: Fetcher = fetch,
+): Promise<CreditPayload> {
+  const response = await fetcher<CreditPayload>(apiUrl(apiBase, "/api/credits/"), {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return readJson(response);
+}
+
+export async function submitCreditTask(
+  apiBase: string,
+  token: string,
+  input: { title: string; estimatedCredits: number },
+  fetcher: Fetcher = fetch,
+): Promise<CreditTaskPayload> {
+  const response = await fetcher<CreditTaskPayload>(apiUrl(apiBase, "/api/credit-tasks/"), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      title: input.title,
+      estimated_credits: input.estimatedCredits,
+    }),
   });
   return readJson(response);
 }

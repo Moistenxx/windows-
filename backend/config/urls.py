@@ -9,4 +9,6 @@ urlpatterns = [
     path("api/auth/register/", views.register, name="register"),
     path("api/auth/login/", views.login, name="login"),
     path("api/auth/me/", views.me, name="me"),
+    path("api/credits/", views.credits, name="credits"),
+    path("api/credit-tasks/", views.credit_tasks, name="credit_tasks"),
 ]

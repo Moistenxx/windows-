@@ -1,6 +1,6 @@
 ﻿# AI 短视频批量生产工作台
 
-Issue #1 skeleton: Django API, React/Tauri client shell, admin entry, and launch/download page entry.
+Current smoke path: Django API + React/Tauri client shell with invite auth, workspace credits, manual recharge, and credit-task freezing.
 
 ## Local commands
 
@@ -12,6 +12,8 @@ Backend API and admin:
 
 - API health: http://127.0.0.1:8000/api/health/
 - Admin: http://127.0.0.1:8000/admin/
+- Credit balance: `GET /api/credits/`
+- Paid task smoke: `POST /api/credit-tasks/` freezes estimated credits
 
 Windows client shell:
 
@@ -48,3 +50,7 @@ After running backend migrations, seed a reusable invite code for local testing:
 ```
 
 Use `ALPHA-1` in the client registration form.
+
+## Dev credits
+
+Manual recharge is intentionally admin-first for v1. In `/admin/`, create a `Credit recharge` with a workspace and amount; it automatically creates the ledger entry and updates the workspace balance. The client then shows the balance and can submit the 120-credit smoke task.

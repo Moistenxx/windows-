@@ -3,7 +3,24 @@ from django.contrib.auth.models import User
 from django.test import TestCase
 from django.urls import reverse
 
-from core.models import AuthToken, InvitationCode, Workspace, WorkspaceMembership
+from core.models import (
+    AuthToken,
+    CreditAccount,
+    CreditLedgerEntry,
+    CreditRecharge,
+    CreditTask,
+    InsufficientCredits,
+    InvitationCode,
+    Workspace,
+    WorkspaceMembership,
+)
+
+
+def make_user_workspace(email="owner@example.com"):
+    user = User.objects.create_user(username=email, email=email, password="secret123")
+    workspace = Workspace.objects.create(name="owner workspace")
+    WorkspaceMembership.objects.create(user=user, workspace=workspace, role="owner")
+    return user, workspace
 
 
 class HealthEndpointTests(TestCase):
@@ -24,11 +41,15 @@ class AdminEntryTests(TestCase):
 
         self.assertIn(response.status_code, {200, 302})
 
-    def test_admin_registers_auth_and_workspace_models(self):
+    def test_admin_registers_auth_workspace_and_credit_models(self):
         self.assertTrue(admin.site.is_registered(InvitationCode))
         self.assertTrue(admin.site.is_registered(Workspace))
         self.assertTrue(admin.site.is_registered(WorkspaceMembership))
         self.assertTrue(admin.site.is_registered(AuthToken))
+        self.assertTrue(admin.site.is_registered(CreditAccount))
+        self.assertTrue(admin.site.is_registered(CreditRecharge))
+        self.assertTrue(admin.site.is_registered(CreditLedgerEntry))
+        self.assertTrue(admin.site.is_registered(CreditTask))
 
 
 class AuthApiTests(TestCase):
@@ -71,13 +92,11 @@ class AuthApiTests(TestCase):
         self.assertEqual(invite.used_count, 1)
 
     def test_login_returns_token_and_default_workspace(self):
-        user = User.objects.create_user(username="owner@example.com", email="owner@example.com", password="secret123")
-        workspace = Workspace.objects.create(name="owner workspace")
-        WorkspaceMembership.objects.create(user=user, workspace=workspace, role="owner")
+        user, workspace = make_user_workspace()
 
         response = self.client.post(
             "/api/auth/login/",
-            data={"email": "owner@example.com", "password": "secret123"},
+            data={"email": user.email, "password": "secret123"},
             content_type="application/json",
         )
 
@@ -87,10 +106,8 @@ class AuthApiTests(TestCase):
         self.assertEqual(payload["workspace"]["id"], workspace.id)
 
     def test_me_returns_only_authenticated_users_workspaces(self):
-        user = User.objects.create_user(username="owner@example.com", email="owner@example.com", password="secret123")
-        own_workspace = Workspace.objects.create(name="owner workspace")
+        user, own_workspace = make_user_workspace()
         other_workspace = Workspace.objects.create(name="other workspace")
-        WorkspaceMembership.objects.create(user=user, workspace=own_workspace, role="owner")
         token = AuthToken.issue_for(user)
 
         response = self.client.get(
@@ -100,7 +117,7 @@ class AuthApiTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
-        self.assertEqual(payload["user"]["email"], "owner@example.com")
+        self.assertEqual(payload["user"]["email"], user.email)
         self.assertEqual(payload["workspaces"], [{"id": own_workspace.id, "name": "owner workspace", "role": "owner"}])
         self.assertNotIn(other_workspace.id, [workspace["id"] for workspace in payload["workspaces"]])
 
@@ -108,3 +125,147 @@ class AuthApiTests(TestCase):
         response = self.client.get("/api/auth/me/")
 
         self.assertEqual(response.status_code, 401)
+
+
+class CreditLedgerTests(TestCase):
+    def test_admin_recharge_adds_balance_and_auditable_ledger_entry(self):
+        _, workspace = make_user_workspace()
+
+        CreditRecharge.objects.create(workspace=workspace, amount=500, note="manual test recharge")
+
+        account = CreditAccount.objects.get(workspace=workspace)
+        self.assertEqual(account.balance, 500)
+        self.assertEqual(account.frozen, 0)
+        self.assertTrue(
+            CreditLedgerEntry.objects.filter(
+                workspace=workspace,
+                kind=CreditLedgerEntry.RECHARGE,
+                amount=500,
+                balance_after=500,
+                frozen_after=0,
+                note="manual test recharge",
+            ).exists()
+        )
+
+    def test_freeze_settle_and_refund_update_available_and_frozen_balances(self):
+        _, workspace = make_user_workspace()
+        CreditRecharge.objects.create(workspace=workspace, amount=500)
+
+        CreditLedgerEntry.freeze(workspace, 120, note="render estimate")
+        account = CreditAccount.objects.get(workspace=workspace)
+        self.assertEqual(account.balance, 380)
+        self.assertEqual(account.frozen, 120)
+
+        CreditLedgerEntry.settle(workspace, 70, note="render success")
+        account.refresh_from_db()
+        self.assertEqual(account.balance, 380)
+        self.assertEqual(account.frozen, 50)
+
+        CreditLedgerEntry.refund(workspace, 50, note="system failure")
+        account.refresh_from_db()
+        self.assertEqual(account.balance, 430)
+        self.assertEqual(account.frozen, 0)
+
+    def test_freeze_rejects_insufficient_credit(self):
+        _, workspace = make_user_workspace()
+        CreditRecharge.objects.create(workspace=workspace, amount=10)
+
+        with self.assertRaises(InsufficientCredits):
+            CreditLedgerEntry.freeze(workspace, 11)
+
+    def test_submitting_paid_task_freezes_estimated_credits(self):
+        user, workspace = make_user_workspace()
+        CreditRecharge.objects.create(workspace=workspace, amount=500)
+
+        task = CreditTask.submit(workspace, user, 120, title="script render")
+
+        account = CreditAccount.objects.get(workspace=workspace)
+        self.assertEqual(task.status, CreditTask.PENDING)
+        self.assertEqual(account.balance, 380)
+        self.assertEqual(account.frozen, 120)
+        self.assertTrue(
+            CreditLedgerEntry.objects.filter(
+                workspace=workspace,
+                task=task,
+                kind=CreditLedgerEntry.FREEZE,
+                amount=120,
+            ).exists()
+        )
+
+    def test_paid_task_success_settles_and_failure_refunds_frozen_credits(self):
+        user, workspace = make_user_workspace()
+        CreditRecharge.objects.create(workspace=workspace, amount=500)
+        success_task = CreditTask.submit(workspace, user, 120, title="success")
+        failed_task = CreditTask.submit(workspace, user, 80, title="failure")
+
+        success_task.mark_succeeded()
+        failed_task.mark_failed()
+
+        account = CreditAccount.objects.get(workspace=workspace)
+        self.assertEqual(account.balance, 380)
+        self.assertEqual(account.frozen, 0)
+        self.assertTrue(
+            CreditLedgerEntry.objects.filter(task=success_task, kind=CreditLedgerEntry.SETTLE, amount=120).exists()
+        )
+        self.assertTrue(
+            CreditLedgerEntry.objects.filter(task=failed_task, kind=CreditLedgerEntry.REFUND, amount=80).exists()
+        )
+
+    def test_paid_task_submission_rejects_insufficient_credit_without_task_record(self):
+        user, workspace = make_user_workspace()
+        CreditRecharge.objects.create(workspace=workspace, amount=10)
+
+        with self.assertRaises(InsufficientCredits):
+            CreditTask.submit(workspace, user, 11)
+
+        self.assertFalse(CreditTask.objects.filter(workspace=workspace).exists())
+
+    def test_authenticated_user_can_read_workspace_credit_balance(self):
+        user, workspace = make_user_workspace()
+        CreditRecharge.objects.create(workspace=workspace, amount=500)
+        CreditLedgerEntry.freeze(workspace, 120)
+        token = AuthToken.issue_for(user)
+
+        response = self.client.get("/api/credits/", HTTP_AUTHORIZATION=f"Bearer {token}")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"workspace_id": workspace.id, "balance": 380, "frozen": 120})
+
+    def test_credit_balance_requires_authentication(self):
+        response = self.client.get("/api/credits/")
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_authenticated_user_can_submit_paid_task_and_freeze_credits(self):
+        user, workspace = make_user_workspace()
+        CreditRecharge.objects.create(workspace=workspace, amount=500)
+        token = AuthToken.issue_for(user)
+
+        response = self.client.post(
+            "/api/credit-tasks/",
+            data={"title": "test render", "estimated_credits": 120},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        payload = response.json()
+        self.assertEqual(payload["task"]["status"], CreditTask.PENDING)
+        self.assertEqual(payload["task"]["estimated_credits"], 120)
+        self.assertEqual(payload["credits"], {"workspace_id": workspace.id, "balance": 380, "frozen": 120})
+
+    def test_paid_task_api_blocks_insufficient_credit(self):
+        user, workspace = make_user_workspace()
+        CreditRecharge.objects.create(workspace=workspace, amount=10)
+        token = AuthToken.issue_for(user)
+
+        response = self.client.post(
+            "/api/credit-tasks/",
+            data={"estimated_credits": 11},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+
+        self.assertEqual(response.status_code, 402)
+        self.assertEqual(response.json()["error"], "Insufficient credits")
+        self.assertFalse(CreditTask.objects.filter(workspace=workspace).exists())

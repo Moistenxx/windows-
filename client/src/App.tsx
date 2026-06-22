@@ -2,11 +2,14 @@
 
 import {
   defaultApiBase,
+  fetchCredits,
   fetchHealth,
   fetchMe,
   login,
   registerWithInvite,
+  submitCreditTask,
   type AuthPayload,
+  type CreditPayload,
   type HealthPayload,
   type MePayload,
 } from "./api";
@@ -19,6 +22,12 @@ type HealthState =
   | { status: "loading" }
   | { status: "online"; payload: HealthPayload }
   | { status: "offline"; message: string };
+
+type CreditState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "ready"; payload: CreditPayload }
+  | { status: "error"; message: string };
 
 type AuthState =
   | { status: "anonymous" }
@@ -42,6 +51,8 @@ function authFromPayload(payload: AuthPayload): AuthState {
 export function App() {
   const [health, setHealth] = useState<HealthState>({ status: "loading" });
   const [auth, setAuth] = useState<AuthState>({ status: "anonymous" });
+  const [credits, setCredits] = useState<CreditState>({ status: "idle" });
+  const [taskMessage, setTaskMessage] = useState("");
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("owner@example.com");
   const [password, setPassword] = useState("secret123");
@@ -78,6 +89,17 @@ export function App() {
       });
   }, []);
 
+  useEffect(() => {
+    if (auth.status !== "authenticated") {
+      setCredits({ status: "idle" });
+      return;
+    }
+    setCredits({ status: "loading" });
+    fetchCredits(apiBase, auth.token)
+      .then((payload) => setCredits({ status: "ready", payload }))
+      .catch((error) => setCredits({ status: "error", message: error instanceof Error ? error.message : "Credit load failed" }));
+  }, [auth]);
+
   async function submit(event: FormEvent) {
     event.preventDefault();
     setAuth({ status: "loading" });
@@ -86,6 +108,7 @@ export function App() {
         ? await registerWithInvite(apiBase, { email, password, inviteCode })
         : await login(apiBase, email, password);
       localStorage.setItem(tokenKey, payload.token);
+      setTaskMessage("");
       setAuth(authFromPayload(payload));
     } catch (error) {
       setAuth({ status: "error", message: error instanceof Error ? error.message : "Auth failed" });
@@ -94,7 +117,23 @@ export function App() {
 
   function logout() {
     localStorage.removeItem(tokenKey);
+    setTaskMessage("");
     setAuth({ status: "anonymous" });
+  }
+
+  async function submitDemoTask() {
+    if (auth.status !== "authenticated") return;
+    setTaskMessage("正在提交 120 积分测试任务...");
+    try {
+      const payload = await submitCreditTask(apiBase, auth.token, {
+        title: "Issue #3 credit smoke task",
+        estimatedCredits: 120,
+      });
+      setCredits({ status: "ready", payload: payload.credits });
+      setTaskMessage(`任务 #${payload.task.id} 已冻结 ${payload.task.estimated_credits} 积分`);
+    } catch (error) {
+      setTaskMessage(error instanceof Error ? error.message : "Task submit failed");
+    }
   }
 
   return (
@@ -103,7 +142,7 @@ export function App() {
         <p className="eyebrow">Windows client shell</p>
         <h1>AI 短视频批量生产工作台</h1>
         <p className="subtitle">
-          Issue #2 烟囱链路：邀请码注册、邮箱登录、默认团队空间。
+          Issue #3 烟囱链路：workspace 积分、人工充值、冻结、扣除、退回。
         </p>
         <div className="status-card" data-state={health.status}>
           <span className="status-dot" />
@@ -130,6 +169,15 @@ export function App() {
                   <li key={workspace.id}>{workspace.name} <span>{workspace.role}</span></li>
                 ))}
               </ul>
+              <div className="credit-card">
+                <b>团队积分</b>
+                {credits.status === "ready" && <p>可用 {credits.payload.balance} · 冻结 {credits.payload.frozen}</p>}
+                {credits.status === "loading" && <p>积分加载中...</p>}
+                {credits.status === "error" && <p>{credits.message}</p>}
+                {credits.status === "idle" && <p>登录后显示</p>}
+                <button className="mini-action" onClick={submitDemoTask}>提交 120 积分测试任务</button>
+                {taskMessage && <p>{taskMessage}</p>}
+              </div>
             </div>
             <button className="ghost" onClick={logout}>退出登录</button>
           </section>

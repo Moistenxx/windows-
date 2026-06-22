@@ -92,3 +92,20 @@ input {
 .workspace-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
 .workspace-list li { display: flex; justify-content: space-between; padding: 12px; border-radius: 14px; background: rgba(255,255,255,.06); }
 .workspace-list span { color: #00e5ff; }
+.credit-card {
+  margin-top: 14px;
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(0, 229, 255, .08);
+  border: 1px solid rgba(0, 229, 255, .18);
+}
+.credit-card p { margin: 6px 0 0; color: #b7c7e8; }
+.mini-action {
+  margin-top: 10px;
+  border: 1px solid rgba(0,229,255,.28);
+  border-radius: 999px;
+  padding: 8px 12px;
+  color: #eaf0ff;
+  background: rgba(0,229,255,.1);
+  cursor: pointer;
+}

@@ -1,6 +1,6 @@
 ﻿import { describe, expect, it, vi } from "vitest";
 
-import { fetchHealth, fetchMe, login, registerWithInvite } from "./api";
+import { fetchCredits, fetchHealth, fetchMe, login, registerWithInvite, submitCreditTask } from "./api";
 
 describe("fetchHealth", () => {
   it("reads backend health JSON from the configured API base", async () => {
@@ -66,5 +66,43 @@ describe("auth API helpers", () => {
       headers: { Authorization: "Bearer abc" },
     });
     expect(result.workspaces).toEqual([{ id: 1, name: "owner workspace", role: "owner" }]);
+  });
+});
+
+describe("credit API helpers", () => {
+  it("fetches the authenticated workspace credit balance", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ workspace_id: 1, balance: 380, frozen: 120 }),
+    });
+
+    const result = await fetchCredits("http://127.0.0.1:8000", "abc", fetchMock);
+
+    expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:8000/api/credits/", {
+      headers: { Authorization: "Bearer abc" },
+    });
+    expect(result).toEqual({ workspace_id: 1, balance: 380, frozen: 120 });
+  });
+
+  it("submits a paid task to freeze estimated credits", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        task: { id: 7, title: "test render", status: "pending", estimated_credits: 120 },
+        credits: { workspace_id: 1, balance: 380, frozen: 120 },
+      }),
+    });
+
+    const result = await submitCreditTask("http://127.0.0.1:8000", "abc", {
+      title: "test render",
+      estimatedCredits: 120,
+    }, fetchMock);
+
+    expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:8000/api/credit-tasks/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer abc" },
+      body: JSON.stringify({ title: "test render", estimated_credits: 120 }),
+    });
+    expect(result.credits).toEqual({ workspace_id: 1, balance: 380, frozen: 120 });
   });
 });

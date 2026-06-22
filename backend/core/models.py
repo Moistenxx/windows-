@@ -1,9 +1,19 @@
-﻿import hashlib
+import hashlib
 import secrets
 
 from django.contrib.auth.models import User
-from django.db import models
+from django.core.validators import MinValueValidator
+from django.db import models, transaction
 from django.utils import timezone
+
+
+class InsufficientCredits(Exception):
+    pass
+
+
+def require_positive_credits(amount):
+    if amount <= 0:
+        raise ValueError("Credit amount must be positive")
 
 
 class InvitationCode(models.Model):
@@ -84,3 +94,204 @@ class AuthToken(models.Model):
 
     def __str__(self):
         return f"token for {self.user.username}"
+
+
+class CreditAccount(models.Model):
+    workspace = models.OneToOneField(Workspace, on_delete=models.CASCADE, related_name="credit_account")
+    balance = models.PositiveIntegerField(default=0)
+    frozen = models.PositiveIntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    @classmethod
+    def for_workspace(cls, workspace):
+        account, _ = cls.objects.get_or_create(workspace=workspace)
+        return account
+
+    def __str__(self):
+        return f"{self.workspace.name}: {self.balance} available, {self.frozen} frozen"
+
+
+class CreditTask(models.Model):
+    PENDING = "pending"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    STATUS_CHOICES = [
+        (PENDING, "Pending"),
+        (SUCCEEDED, "Succeeded"),
+        (FAILED, "Failed"),
+    ]
+
+    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name="credit_tasks")
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="credit_tasks")
+    title = models.CharField(max_length=160, default="Paid task")
+    estimated_credits = models.PositiveIntegerField(validators=[MinValueValidator(1)])
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=PENDING)
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    @classmethod
+    def submit(cls, workspace, created_by, estimated_credits, title="Paid task"):
+        require_positive_credits(estimated_credits)
+        with transaction.atomic():
+            task = cls.objects.create(
+                workspace=workspace,
+                created_by=created_by,
+                estimated_credits=estimated_credits,
+                title=title or "Paid task",
+            )
+            CreditLedgerEntry.freeze(workspace, estimated_credits, note=task.title, task=task)
+            return task
+
+    def mark_succeeded(self):
+        return self._finish(self.SUCCEEDED)
+
+    def mark_failed(self):
+        return self._finish(self.FAILED)
+
+    def _finish(self, status):
+        with transaction.atomic():
+            task = type(self).objects.select_for_update().get(pk=self.pk)
+            if task.status != self.PENDING:
+                raise ValueError("Credit task is already finished")
+            if status == self.SUCCEEDED:
+                CreditLedgerEntry.settle(task.workspace, task.estimated_credits, note=task.title, task=task)
+            elif status == self.FAILED:
+                CreditLedgerEntry.refund(task.workspace, task.estimated_credits, note=task.title, task=task)
+            else:
+                raise ValueError("Unsupported credit task status")
+            task.status = status
+            task.completed_at = timezone.now()
+            task.save(update_fields=["status", "completed_at"])
+            self.status = task.status
+            self.completed_at = task.completed_at
+            return task
+
+    def __str__(self):
+        return f"{self.workspace.name} {self.title} {self.status}"
+
+
+class CreditLedgerEntry(models.Model):
+    RECHARGE = "recharge"
+    FREEZE = "freeze"
+    SETTLE = "settle"
+    REFUND = "refund"
+    KIND_CHOICES = [
+        (RECHARGE, "Recharge"),
+        (FREEZE, "Freeze"),
+        (SETTLE, "Settle"),
+        (REFUND, "Refund"),
+    ]
+
+    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name="credit_ledger_entries")
+    task = models.ForeignKey(CreditTask, on_delete=models.SET_NULL, null=True, blank=True, related_name="ledger_entries")
+    kind = models.CharField(max_length=20, choices=KIND_CHOICES)
+    amount = models.PositiveIntegerField(validators=[MinValueValidator(1)])
+    balance_after = models.PositiveIntegerField()
+    frozen_after = models.PositiveIntegerField()
+    note = models.CharField(max_length=240, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    @classmethod
+    def _locked_account(cls, workspace):
+        CreditAccount.objects.get_or_create(workspace=workspace)
+        return CreditAccount.objects.select_for_update().get(workspace=workspace)
+
+    @classmethod
+    def recharge(cls, workspace, amount, note="", task=None):
+        require_positive_credits(amount)
+        with transaction.atomic():
+            account = cls._locked_account(workspace)
+            account.balance += amount
+            account.save(update_fields=["balance", "updated_at"])
+            return cls.objects.create(
+                workspace=workspace,
+                task=task,
+                kind=cls.RECHARGE,
+                amount=amount,
+                balance_after=account.balance,
+                frozen_after=account.frozen,
+                note=note,
+            )
+
+    @classmethod
+    def freeze(cls, workspace, amount, note="", task=None):
+        require_positive_credits(amount)
+        with transaction.atomic():
+            account = cls._locked_account(workspace)
+            if account.balance < amount:
+                raise InsufficientCredits("Insufficient credits")
+            account.balance -= amount
+            account.frozen += amount
+            account.save(update_fields=["balance", "frozen", "updated_at"])
+            return cls.objects.create(
+                workspace=workspace,
+                task=task,
+                kind=cls.FREEZE,
+                amount=amount,
+                balance_after=account.balance,
+                frozen_after=account.frozen,
+                note=note,
+            )
+
+    @classmethod
+    def settle(cls, workspace, amount, note="", task=None):
+        require_positive_credits(amount)
+        with transaction.atomic():
+            account = cls._locked_account(workspace)
+            if account.frozen < amount:
+                raise InsufficientCredits("Insufficient frozen credits")
+            account.frozen -= amount
+            account.save(update_fields=["frozen", "updated_at"])
+            return cls.objects.create(
+                workspace=workspace,
+                task=task,
+                kind=cls.SETTLE,
+                amount=amount,
+                balance_after=account.balance,
+                frozen_after=account.frozen,
+                note=note,
+            )
+
+    @classmethod
+    def refund(cls, workspace, amount, note="", task=None):
+        require_positive_credits(amount)
+        with transaction.atomic():
+            account = cls._locked_account(workspace)
+            if account.frozen < amount:
+                raise InsufficientCredits("Insufficient frozen credits")
+            account.frozen -= amount
+            account.balance += amount
+            account.save(update_fields=["balance", "frozen", "updated_at"])
+            return cls.objects.create(
+                workspace=workspace,
+                task=task,
+                kind=cls.REFUND,
+                amount=amount,
+                balance_after=account.balance,
+                frozen_after=account.frozen,
+                note=note,
+            )
+
+    def __str__(self):
+        return f"{self.workspace.name} {self.kind} {self.amount}"
+
+
+class CreditRecharge(models.Model):
+    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name="credit_recharges")
+    amount = models.PositiveIntegerField(validators=[MinValueValidator(1)])
+    note = models.CharField(max_length=240, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    applied_at = models.DateTimeField(null=True, blank=True)
+
+    def save(self, *args, **kwargs):
+        require_positive_credits(self.amount)
+        apply_after_save = self.applied_at is None
+        with transaction.atomic():
+            super().save(*args, **kwargs)
+            if apply_after_save:
+                CreditLedgerEntry.recharge(self.workspace, self.amount, self.note)
+                self.applied_at = timezone.now()
+                type(self).objects.filter(pk=self.pk, applied_at__isnull=True).update(applied_at=self.applied_at)
+
+    def __str__(self):
+        return f"{self.workspace.name} recharge {self.amount}"

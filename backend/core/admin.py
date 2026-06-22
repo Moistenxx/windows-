@@ -1,6 +1,15 @@
 ﻿from django.contrib import admin
 
-from .models import AuthToken, InvitationCode, Workspace, WorkspaceMembership
+from .models import (
+    AuthToken,
+    CreditAccount,
+    CreditLedgerEntry,
+    CreditRecharge,
+    CreditTask,
+    InvitationCode,
+    Workspace,
+    WorkspaceMembership,
+)
 
 
 @admin.register(InvitationCode)
@@ -26,3 +35,38 @@ class WorkspaceMembershipAdmin(admin.ModelAdmin):
 class AuthTokenAdmin(admin.ModelAdmin):
     list_display = ("user", "created_at")
     search_fields = ("user__username",)
+
+
+@admin.register(CreditAccount)
+class CreditAccountAdmin(admin.ModelAdmin):
+    list_display = ("workspace", "balance", "frozen", "updated_at")
+    search_fields = ("workspace__name",)
+    readonly_fields = ("balance", "frozen", "updated_at")
+
+
+@admin.register(CreditRecharge)
+class CreditRechargeAdmin(admin.ModelAdmin):
+    list_display = ("workspace", "amount", "note", "created_at", "applied_at")
+    search_fields = ("workspace__name", "note")
+    readonly_fields = ("created_at", "applied_at")
+
+    def get_readonly_fields(self, request, obj=None):
+        if obj and obj.applied_at:
+            return self.readonly_fields + ("workspace", "amount", "note")
+        return self.readonly_fields
+
+
+@admin.register(CreditLedgerEntry)
+class CreditLedgerEntryAdmin(admin.ModelAdmin):
+    list_display = ("workspace", "task", "kind", "amount", "balance_after", "frozen_after", "created_at")
+    list_filter = ("kind",)
+    search_fields = ("workspace__name", "note")
+    readonly_fields = ("workspace", "task", "kind", "amount", "balance_after", "frozen_after", "note", "created_at")
+
+
+@admin.register(CreditTask)
+class CreditTaskAdmin(admin.ModelAdmin):
+    list_display = ("workspace", "title", "estimated_credits", "status", "created_by", "created_at", "completed_at")
+    list_filter = ("status",)
+    search_fields = ("workspace__name", "title", "created_by__username")
+    readonly_fields = ("workspace", "created_by", "title", "estimated_credits", "status", "created_at", "completed_at")
