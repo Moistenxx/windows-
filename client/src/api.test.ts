@@ -2,7 +2,11 @@
 
 import {
   estimateAiCredits,
+  createAssetUpload,
+  deleteAsset,
+  contentTypeFor,
   fetchAiProviders,
+  fetchAssets,
   fetchCredits,
   fetchCustomers,
   fetchHealth,
@@ -177,6 +181,47 @@ describe("customer API helpers", () => {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: "Bearer abc" },
       body: JSON.stringify({ name: "Acme", industry: "jewelry" }),
+    });
+  });
+});
+
+describe("asset API helpers", () => {
+  it("falls back to content type by filename", () => {
+    expect(contentTypeFor("clip.mov")).toBe("video/quicktime");
+    expect(contentTypeFor("voice.wav", "")).toBe("audio/wav");
+  });
+
+  it("creates upload instructions for an asset", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        asset: { id: 1, filename: "clip.mp4", asset_type: "video", deleted: false },
+        upload: { method: "PUT", url: "local://x", headers: { "Content-Type": "video/mp4" } },
+      }),
+    });
+
+    const result = await createAssetUpload("http://127.0.0.1:8000", "abc", "clip.mp4", "video/mp4", fetchMock);
+
+    expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:8000/api/assets/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer abc" },
+      body: JSON.stringify({ filename: "clip.mp4", content_type: "video/mp4" }),
+    });
+    expect(result.upload.method).toBe("PUT");
+  });
+
+  it("fetches and deletes assets", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ assets: [{ id: 1, filename: "clip.mp4" }] }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ id: 1, deleted: true }) });
+
+    await fetchAssets("http://127.0.0.1:8000", "abc", fetchMock);
+    await deleteAsset("http://127.0.0.1:8000", "abc", 1, fetchMock);
+
+    expect(fetchMock).toHaveBeenLastCalledWith("http://127.0.0.1:8000/api/assets/1/delete/", {
+      method: "POST",
+      headers: { Authorization: "Bearer abc" },
     });
   });
 });

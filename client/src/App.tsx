@@ -1,9 +1,13 @@
 ﻿import { FormEvent, useEffect, useState } from "react";
 
 import {
+  createAssetUpload,
+  contentTypeFor,
+  deleteAsset,
   defaultApiBase,
   estimateAiCredits,
   fetchAiProviders,
+  fetchAssets,
   fetchCredits,
   fetchCustomers,
   fetchHealth,
@@ -13,6 +17,7 @@ import {
   saveCustomer,
   submitCreditTask,
   type AiProvider,
+  type Asset,
   type AuthPayload,
   type CreditPayload,
   type CustomerProfile,
@@ -47,6 +52,12 @@ type CustomerState =
   | { status: "ready"; customers: CustomerProfile[]; selectedId: number | null }
   | { status: "error"; message: string };
 
+type AssetState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "ready"; assets: Asset[]; message?: string }
+  | { status: "error"; message: string };
+
 type AuthState =
   | { status: "anonymous" }
   | { status: "loading" }
@@ -72,6 +83,7 @@ export function App() {
   const [credits, setCredits] = useState<CreditState>({ status: "idle" });
   const [providers, setProviders] = useState<ProviderState>({ status: "idle" });
   const [customers, setCustomers] = useState<CustomerState>({ status: "idle" });
+  const [assets, setAssets] = useState<AssetState>({ status: "idle" });
   const [customerForm, setCustomerForm] = useState<CustomerProfile>({ name: "", industry: "", products: "", selling_points: "" });
   const [taskMessage, setTaskMessage] = useState("");
   const [mode, setMode] = useState<"login" | "register">("login");
@@ -115,6 +127,7 @@ export function App() {
       setCredits({ status: "idle" });
       setProviders({ status: "idle" });
       setCustomers({ status: "idle" });
+      setAssets({ status: "idle" });
       return;
     }
     setCredits({ status: "loading" });
@@ -140,6 +153,10 @@ export function App() {
         });
       })
       .catch((error) => setCustomers({ status: "error", message: error instanceof Error ? error.message : "Customer load failed" }));
+    setAssets({ status: "loading" });
+    fetchAssets(apiBase, auth.token)
+      .then((payload) => setAssets({ status: "ready", assets: payload.assets }))
+      .catch((error) => setAssets({ status: "error", message: error instanceof Error ? error.message : "Asset load failed" }));
   }, [auth]);
 
   async function submit(event: FormEvent) {
@@ -201,6 +218,22 @@ export function App() {
       setCustomers({ status: "ready", customers: [saved, ...rest], selectedId: saved.id ?? null });
     }
     setCustomerForm(saved);
+  }
+
+  async function addAsset(file: File | undefined) {
+    if (!file || auth.status !== "authenticated") return;
+    const payload = await createAssetUpload(apiBase, auth.token, file.name, contentTypeFor(file.name, file.type));
+    setAssets({
+      status: "ready",
+      assets: assets.status === "ready" ? [payload.asset, ...assets.assets] : [payload.asset],
+      message: `已生成直传地址：${payload.upload.url}`,
+    });
+  }
+
+  async function removeAsset(assetId: number) {
+    if (auth.status !== "authenticated" || assets.status !== "ready") return;
+    await deleteAsset(apiBase, auth.token, assetId);
+    setAssets({ status: "ready", assets: assets.assets.filter((asset) => asset.id !== assetId), message: "素材已删除" });
   }
 
   return (
@@ -269,6 +302,28 @@ export function App() {
                   <button className="mini-action">保存档案</button>
                 </form>
                 {customers.status === "ready" && customers.selectedId && <p>项目创建将使用当前选中的客户档案。</p>}
+              </div>
+              <div className="credit-card">
+                <b>团队素材库</b>
+                <input
+                  type="file"
+                  accept=".mp4,.mov,.jpg,.jpeg,.png,.webp,.mp3,.wav,video/mp4,video/quicktime,image/jpeg,image/png,image/webp,audio/mpeg,audio/wav"
+                  onChange={(event) => addAsset(event.target.files?.[0])}
+                />
+                {assets.status === "loading" && <p>素材加载中...</p>}
+                {assets.status === "error" && <p>{assets.message}</p>}
+                {assets.status === "ready" && assets.message && <p>{assets.message}</p>}
+                {assets.status === "ready" && assets.assets.length === 0 && <p>暂无素材</p>}
+                {assets.status === "ready" && assets.assets.length > 0 && (
+                  <ul className="workspace-list">
+                    {assets.assets.map((asset) => (
+                      <li key={asset.id}>
+                        {asset.filename} <span>{asset.asset_type} · {asset.retention_days}天</span>
+                        <button className="mini-action" onClick={() => removeAsset(asset.id)}>删除</button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
               <div className="credit-card">
                 <b>高级模型</b>

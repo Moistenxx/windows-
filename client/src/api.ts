@@ -53,6 +53,24 @@ export type CustomerProfile = {
 
 export type CustomersPayload = { customers: CustomerProfile[] };
 
+export type Asset = {
+  id: number;
+  workspace_id?: number;
+  filename: string;
+  content_type?: string;
+  asset_type?: string;
+  object_key?: string;
+  retention_days?: number;
+  expires_at?: string;
+  deleted?: boolean;
+};
+
+export type AssetsPayload = { assets: Asset[] };
+export type AssetUploadPayload = {
+  asset: Asset;
+  upload: { method: string; url: string; headers: Record<string, string> };
+};
+
 export type AuthPayload = {
   token: string;
   user: { id?: number; email: string };
@@ -223,6 +241,64 @@ export async function saveCustomer(
       Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify(body),
+  });
+  return readJson(response);
+}
+
+export async function fetchAssets(
+  apiBase: string,
+  token: string,
+  fetcher: Fetcher = fetch,
+): Promise<AssetsPayload> {
+  const response = await fetcher<AssetsPayload>(apiUrl(apiBase, "/api/assets/"), {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return readJson(response);
+}
+
+export async function createAssetUpload(
+  apiBase: string,
+  token: string,
+  filename: string,
+  contentType: string,
+  fetcher: Fetcher = fetch,
+): Promise<AssetUploadPayload> {
+  const response = await fetcher<AssetUploadPayload>(apiUrl(apiBase, "/api/assets/"), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ filename, content_type: contentType }),
+  });
+  return readJson(response);
+}
+
+export function contentTypeFor(filename: string, browserType = "") {
+  const type = browserType.trim();
+  if (type) return type;
+  const ext = filename.toLowerCase().split(".").pop();
+  return {
+    mp4: "video/mp4",
+    mov: "video/quicktime",
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    png: "image/png",
+    webp: "image/webp",
+    mp3: "audio/mpeg",
+    wav: "audio/wav",
+  }[ext ?? ""] ?? "";
+}
+
+export async function deleteAsset(
+  apiBase: string,
+  token: string,
+  assetId: number,
+  fetcher: Fetcher = fetch,
+): Promise<Asset> {
+  const response = await fetcher<Asset>(apiUrl(apiBase, `/api/assets/${assetId}/delete/`), {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
   });
   return readJson(response);
 }

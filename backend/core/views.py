@@ -1,4 +1,5 @@
-﻿import json
+import json
+from pathlib import PurePath
 
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
@@ -6,10 +7,12 @@ from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.db import transaction
 from django.http import JsonResponse
+from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 
 from .models import (
     AIProvider,
+    Asset,
     AuthToken,
     CreditAccount,
     CreditTask,
@@ -312,3 +315,78 @@ def customer_detail(request, customer_id):
         return error(str(exc))
     profile.save()
     return JsonResponse(profile.public_payload())
+
+
+ASSET_TYPES = {
+    "mp4": (Asset.VIDEO, "video/mp4"),
+    "mov": (Asset.VIDEO, "video/quicktime"),
+    "jpg": (Asset.IMAGE, "image/jpeg"),
+    "jpeg": (Asset.IMAGE, "image/jpeg"),
+    "png": (Asset.IMAGE, "image/png"),
+    "webp": (Asset.IMAGE, "image/webp"),
+    "mp3": (Asset.AUDIO, "audio/mpeg"),
+    "wav": (Asset.AUDIO, "audio/wav"),
+}
+
+
+def asset_type_for(filename, content_type):
+    asset = ASSET_TYPES.get(PurePath(filename).suffix.lower().lstrip("."))
+    if not asset or asset[1] != content_type:
+        raise ValueError("Supported files: MP4/MOV, JPG/PNG/WEBP, MP3/WAV")
+    return asset[0]
+
+
+@csrf_exempt
+def assets(request):
+    user, auth_error = require_user(request)
+    if auth_error:
+        return auth_error
+    workspace = first_membership(user).workspace
+    if request.method == "GET":
+        rows = Asset.objects.filter(workspace=workspace, deleted_at__isnull=True).order_by("-created_at", "id")
+        return JsonResponse({"assets": [asset.public_payload() for asset in rows]})
+    if request.method != "POST":
+        return error("GET or POST required", status=405)
+    data = read_json(request)
+    filename = str(data.get("filename") or "").strip()
+    content_type = str(data.get("content_type") or "").strip().lower()
+    try:
+        asset_type = asset_type_for(filename, content_type)
+    except ValueError as exc:
+        return error(str(exc))
+    asset = Asset.objects.create(
+        workspace=workspace,
+        uploaded_by=user,
+        filename=PurePath(filename).name[:240] or "asset",
+        content_type=content_type,
+        asset_type=asset_type,
+        object_key=Asset.new_object_key(workspace, filename),
+    )
+    return JsonResponse(
+        {
+            "asset": asset.public_payload(),
+            "upload": {
+                "method": "PUT",
+                "url": f"local://{asset.object_key}",
+                "headers": {"Content-Type": content_type},
+            },
+        },
+        status=201,
+    )
+
+
+@csrf_exempt
+def asset_delete(request, asset_id):
+    if request.method != "POST":
+        return error("POST required", status=405)
+    user, auth_error = require_user(request)
+    if auth_error:
+        return auth_error
+    workspace = first_membership(user).workspace
+    try:
+        asset = Asset.objects.get(id=asset_id, workspace=workspace)
+    except Asset.DoesNotExist:
+        return error("Asset not found", status=404)
+    asset.deleted_at = timezone.now()
+    asset.save(update_fields=["deleted_at"])
+    return JsonResponse(asset.public_payload())

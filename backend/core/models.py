@@ -1,5 +1,7 @@
 import hashlib
 import secrets
+import uuid
+from datetime import timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
 from django.contrib.auth.models import User
@@ -175,6 +177,52 @@ class CustomerProfile(models.Model):
 
     def __str__(self):
         return f"{self.workspace.name} {self.name}"
+
+
+class Asset(models.Model):
+    VIDEO = "video"
+    IMAGE = "image"
+    AUDIO = "audio"
+    OUTPUT = "output"
+    TYPE_CHOICES = [(VIDEO, "Video"), (IMAGE, "Image"), (AUDIO, "Audio"), (OUTPUT, "Output")]
+
+    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name="assets")
+    uploaded_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="assets")
+    filename = models.CharField(max_length=240)
+    content_type = models.CharField(max_length=120)
+    asset_type = models.CharField(max_length=20, choices=TYPE_CHOICES)
+    object_key = models.CharField(max_length=320, unique=True)
+    retention_days = models.PositiveIntegerField(default=30)
+    expires_at = models.DateTimeField()
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    @classmethod
+    def new_object_key(cls, workspace, filename):
+        safe_name = filename.replace("\\", "/").split("/")[-1][:120] or "asset"
+        return f"workspaces/{workspace.id}/assets/{uuid.uuid4().hex}/{safe_name}"
+
+    def save(self, *args, **kwargs):
+        self.retention_days = 90 if self.asset_type == self.OUTPUT else 30
+        if not self.expires_at:
+            self.expires_at = timezone.now() + timedelta(days=self.retention_days)
+        super().save(*args, **kwargs)
+
+    def public_payload(self):
+        return {
+            "id": self.id,
+            "workspace_id": self.workspace_id,
+            "filename": self.filename,
+            "content_type": self.content_type,
+            "asset_type": self.asset_type,
+            "object_key": self.object_key,
+            "retention_days": self.retention_days,
+            "expires_at": self.expires_at.isoformat(),
+            "deleted": self.deleted_at is not None,
+        }
+
+    def __str__(self):
+        return f"{self.workspace.name} {self.filename}"
 
 
 class CreditAccount(models.Model):

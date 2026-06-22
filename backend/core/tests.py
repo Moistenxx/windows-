@@ -4,6 +4,7 @@ from django.test import TestCase
 from django.urls import reverse
 
 from core.models import (
+    Asset,
     AuthToken,
     CustomerProfile,
     CreditAccount,
@@ -54,6 +55,7 @@ class AdminEntryTests(TestCase):
         self.assertTrue(admin.site.is_registered(CreditTask))
         self.assertTrue(admin.site.is_registered(AIProvider))
         self.assertTrue(admin.site.is_registered(CustomerProfile))
+        self.assertTrue(admin.site.is_registered(Asset))
 
 
 class AuthApiTests(TestCase):
@@ -415,3 +417,60 @@ class CustomerProfileTests(TestCase):
         token = AuthToken.issue_for(user)
         response = self.client.post("/api/customers/", data={"industry": "food"}, content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {token}")
         self.assertEqual(response.status_code, 400)
+
+
+class AssetLibraryTests(TestCase):
+    def test_user_can_create_list_and_delete_asset_upload_intent(self):
+        user, workspace = make_user_workspace()
+        token = AuthToken.issue_for(user)
+
+        response = self.client.post(
+            "/api/assets/",
+            data={"filename": "clip.mp4", "content_type": "video/mp4"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        payload = response.json()
+        self.assertEqual(payload["asset"]["workspace_id"], workspace.id)
+        self.assertEqual(payload["asset"]["asset_type"], "video")
+        self.assertEqual(payload["asset"]["retention_days"], 30)
+        self.assertFalse(payload["asset"]["deleted"])
+        self.assertEqual(payload["upload"]["method"], "PUT")
+        self.assertEqual(payload["upload"]["headers"], {"Content-Type": "video/mp4"})
+        self.assertIn("local://", payload["upload"]["url"])
+
+        response = self.client.get("/api/assets/", HTTP_AUTHORIZATION=f"Bearer {token}")
+        self.assertEqual(len(response.json()["assets"]), 1)
+
+        asset_id = payload["asset"]["id"]
+        response = self.client.post(f"/api/assets/{asset_id}/delete/", HTTP_AUTHORIZATION=f"Bearer {token}")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["deleted"])
+
+        response = self.client.get("/api/assets/", HTTP_AUTHORIZATION=f"Bearer {token}")
+        self.assertEqual(response.json(), {"assets": []})
+
+    def test_assets_are_workspace_scoped_and_validate_supported_media(self):
+        user, _ = make_user_workspace()
+        other_user, other_workspace = make_user_workspace("asset-other@example.com")
+        Asset.objects.create(workspace=other_workspace, uploaded_by=other_user, filename="other.png", content_type="image/png", asset_type=Asset.IMAGE, object_key="x")
+        token = AuthToken.issue_for(user)
+
+        response = self.client.get("/api/assets/", HTTP_AUTHORIZATION=f"Bearer {token}")
+        self.assertEqual(response.json(), {"assets": []})
+
+        response = self.client.post(
+            "/api/assets/",
+            data={"filename": "bad.exe", "content_type": "application/octet-stream"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_output_asset_retention_policy_is_90_days(self):
+        user, workspace = make_user_workspace()
+        asset = Asset.objects.create(workspace=workspace, uploaded_by=user, filename="out.mp4", content_type="video/mp4", asset_type=Asset.OUTPUT, object_key="out")
+
+        self.assertEqual(asset.retention_days, 90)

@@ -2,6 +2,7 @@
 
 from .models import (
     AIProvider,
+    Asset,
     AuthToken,
     CustomerProfile,
     CreditAccount,
@@ -53,6 +54,14 @@ class CustomerProfileAdmin(admin.ModelAdmin):
     list_display = ("workspace", "name", "industry", "updated_at")
     search_fields = ("workspace__name", "name", "industry", "products", "selling_points")
     readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(Asset)
+class AssetAdmin(admin.ModelAdmin):
+    list_display = ("workspace", "filename", "asset_type", "retention_days", "deleted_at", "created_at")
+    list_filter = ("asset_type", "deleted_at")
+    search_fields = ("workspace__name", "filename", "object_key")
+    readonly_fields = ("created_at",)
 
 
 @admin.register(CreditAccount)

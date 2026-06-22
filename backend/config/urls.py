@@ -1,4 +1,4 @@
-﻿from django.contrib import admin
+from django.contrib import admin
 from django.urls import path
 
 from core import views
@@ -16,4 +16,6 @@ urlpatterns = [
     path("api/ai/fake-call/", views.ai_fake_call, name="ai_fake_call"),
     path("api/customers/", views.customers, name="customers"),
     path("api/customers/<int:customer_id>/", views.customer_detail, name="customer_detail"),
+    path("api/assets/", views.assets, name="assets"),
+    path("api/assets/<int:asset_id>/delete/", views.asset_delete, name="asset_delete"),
 ]
