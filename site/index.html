@@ -1,0 +1,53 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI 短视频批量生产工作台</title>
+  <style>
+    :root { color: #eaf0ff; background: #050812; font-family: "Microsoft YaHei", system-ui, sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: radial-gradient(circle at 50% 0%, rgba(0,229,255,.26), transparent 36%), #050812; }
+    main { width: min(1120px, 92vw); margin: 0 auto; padding: 42px 0 80px; }
+    nav { display: flex; justify-content: space-between; align-items: center; padding: 24px 0; color: #8fa3c7; }
+    .brand { color: #fff; font-weight: 900; letter-spacing: .08em; }
+    .hero { min-height: 68vh; display: grid; place-items: center; text-align: center; }
+    .eyebrow { color: #00e5ff; letter-spacing: .22em; text-transform: uppercase; font-family: Consolas, monospace; }
+    h1 { margin: 18px 0; font-size: clamp(48px, 8vw, 112px); line-height: .92; letter-spacing: -.06em; }
+    h1 span { color: transparent; background: linear-gradient(90deg, #00e5ff, #fff, #7a5cff); -webkit-background-clip: text; background-clip: text; }
+    p { color: #b7c7e8; font-size: 20px; line-height: 1.75; }
+    .cta { display: inline-flex; margin-top: 18px; padding: 13px 22px; border-radius: 999px; background: linear-gradient(90deg, #00e5ff, #ffd37a); color: #06111e; font-weight: 900; text-decoration: none; }
+    .workbench { margin-top: 44px; border: 1px solid rgba(114,213,255,.22); border-radius: 30px; background: rgba(15,24,45,.78); padding: 24px; text-align: left; box-shadow: 0 32px 120px rgba(0,0,0,.45); }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .card { border: 1px solid rgba(255,255,255,.1); border-radius: 18px; padding: 18px; background: rgba(255,255,255,.055); }
+    .card b { color: #fff; }
+    @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <main>
+    <nav><div class="brand">VIDEO ENGINE</div><div>爆款文案 · 云端剪辑 · 批量混剪</div></nav>
+    <section class="hero">
+      <div>
+        <div class="eyebrow">Douyin AI Production System</div>
+        <h1>AI 短视频<br><span>批量生产工作台</span></h1>
+        <p>Windows 客户端轻量安装，云端 Worker 批量处理，积分制收费。</p>
+        <a class="cta" href="#download">下载 Windows 客户端</a>
+      </div>
+    </section>
+    <section class="workbench">
+      <h2>客户端工作台预览</h2>
+      <div class="grid">
+        <div class="card"><b>上传素材</b><p>素材直传云端，后续自动打标签。</p></div>
+        <div class="card"><b>生成脚本</b><p>按行业模板生成抖音爆款文案。</p></div>
+        <div class="card"><b>任务队列</b><p>字幕、配音、剪辑、导出全部异步处理。</p></div>
+        <div class="card"><b>成片预览</b><p>客户端查看 MP4 结果并下载。</p></div>
+      </div>
+    </section>
+    <section id="download" class="workbench">
+      <h2>申请试用</h2>
+      <p>安装包、邀请码和人工充值流程会在后续 issue 中补齐。</p>
+    </section>
+  </main>
+</body>
+</html>
