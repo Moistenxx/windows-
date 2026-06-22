@@ -37,6 +37,22 @@ export type AiProvider = {
 export type AiProvidersPayload = { providers: AiProvider[] };
 export type AiEstimatePayload = { provider_id: number; estimated_credits: number };
 
+export type CustomerProfile = {
+  id?: number;
+  workspace_id?: number;
+  name: string;
+  industry?: string;
+  products?: string;
+  target_audience?: string;
+  selling_points?: string;
+  forbidden_words?: string;
+  contact_hooks?: string;
+  style_preference?: string;
+  logo_or_common_assets?: string;
+};
+
+export type CustomersPayload = { customers: CustomerProfile[] };
+
 export type AuthPayload = {
   token: string;
   user: { id?: number; email: string };
@@ -178,6 +194,35 @@ export async function estimateAiCredits(
       Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify({ provider_id: providerId, base_credits: baseCredits }),
+  });
+  return readJson(response);
+}
+
+export async function fetchCustomers(
+  apiBase: string,
+  token: string,
+  fetcher: Fetcher = fetch,
+): Promise<CustomersPayload> {
+  const response = await fetcher<CustomersPayload>(apiUrl(apiBase, "/api/customers/"), {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return readJson(response);
+}
+
+export async function saveCustomer(
+  apiBase: string,
+  token: string,
+  input: CustomerProfile,
+  fetcher: Fetcher = fetch,
+): Promise<CustomerProfile> {
+  const { id, workspace_id, ...body } = input;
+  const response = await fetcher<CustomerProfile>(apiUrl(apiBase, id ? `/api/customers/${id}/` : "/api/customers/"), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(body),
   });
   return readJson(response);
 }

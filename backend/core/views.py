@@ -13,6 +13,7 @@ from .models import (
     AuthToken,
     CreditAccount,
     CreditTask,
+    CustomerProfile,
     InsufficientCredits,
     InvitationCode,
     Workspace,
@@ -243,3 +244,71 @@ def ai_fake_call(request):
     except (AIProvider.DoesNotExist, TypeError, ValueError):
         return error("Valid provider_id required")
     return JsonResponse({"provider_id": provider.id, "output": provider.fake_call(data.get("prompt", ""))})
+
+
+CUSTOMER_FIELDS = [
+    "name",
+    "industry",
+    "products",
+    "target_audience",
+    "selling_points",
+    "forbidden_words",
+    "contact_hooks",
+    "style_preference",
+    "logo_or_common_assets",
+]
+
+
+def customer_input(data, existing=None):
+    values = {}
+    for field in CUSTOMER_FIELDS:
+        if field in data:
+            value = str(data.get(field) or "").strip()
+            if field == "name":
+                value = value[:160]
+            if field == "industry":
+                value = value[:120]
+            values[field] = value
+    name = values["name"] if "name" in values else (existing.name if existing else "")
+    if not name:
+        raise ValueError("Customer name required")
+    return values
+
+
+@csrf_exempt
+def customers(request):
+    user, auth_error = require_user(request)
+    if auth_error:
+        return auth_error
+    workspace = first_membership(user).workspace
+    if request.method == "GET":
+        profiles = CustomerProfile.objects.filter(workspace=workspace).order_by("-updated_at", "id")
+        return JsonResponse({"customers": [profile.public_payload() for profile in profiles]})
+    if request.method != "POST":
+        return error("GET or POST required", status=405)
+    try:
+        profile = CustomerProfile.objects.create(workspace=workspace, **customer_input(read_json(request)))
+    except ValueError as exc:
+        return error(str(exc))
+    return JsonResponse(profile.public_payload(), status=201)
+
+
+@csrf_exempt
+def customer_detail(request, customer_id):
+    user, auth_error = require_user(request)
+    if auth_error:
+        return auth_error
+    workspace = first_membership(user).workspace
+    try:
+        profile = CustomerProfile.objects.get(id=customer_id, workspace=workspace)
+    except CustomerProfile.DoesNotExist:
+        return error("Customer not found", status=404)
+    if request.method != "POST":
+        return error("POST required", status=405)
+    try:
+        for field, value in customer_input(read_json(request), existing=profile).items():
+            setattr(profile, field, value)
+    except ValueError as exc:
+        return error(str(exc))
+    profile.save()
+    return JsonResponse(profile.public_payload())

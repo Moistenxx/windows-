@@ -5,6 +5,7 @@ from django.urls import reverse
 
 from core.models import (
     AuthToken,
+    CustomerProfile,
     CreditAccount,
     CreditLedgerEntry,
     CreditRecharge,
@@ -52,6 +53,7 @@ class AdminEntryTests(TestCase):
         self.assertTrue(admin.site.is_registered(CreditLedgerEntry))
         self.assertTrue(admin.site.is_registered(CreditTask))
         self.assertTrue(admin.site.is_registered(AIProvider))
+        self.assertTrue(admin.site.is_registered(CustomerProfile))
 
 
 class AuthApiTests(TestCase):
@@ -342,3 +344,74 @@ class AIProviderTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["output"], "fake-llm generated: gold jewelry")
+
+
+class CustomerProfileTests(TestCase):
+    def test_authenticated_user_can_create_list_and_update_workspace_profile(self):
+        user, workspace = make_user_workspace()
+        token = AuthToken.issue_for(user)
+
+        response = self.client.post(
+            "/api/customers/",
+            data={
+                "name": "Acme Jewelry",
+                "industry": "jewelry",
+                "products": "gold bracelets",
+                "target_audience": "brides",
+                "selling_points": "handmade, certified",
+                "forbidden_words": "guaranteed returns",
+                "contact_hooks": "DM for price",
+                "style_preference": "premium",
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        profile_id = response.json()["id"]
+        self.assertEqual(response.json()["workspace_id"], workspace.id)
+
+        response = self.client.get("/api/customers/", HTTP_AUTHORIZATION=f"Bearer {token}")
+        self.assertEqual(len(response.json()["customers"]), 1)
+        self.assertEqual(response.json()["customers"][0]["name"], "Acme Jewelry")
+        self.assertEqual(response.json()["customers"][0]["selling_points"], "handmade, certified")
+
+        response = self.client.post(
+            f"/api/customers/{profile_id}/",
+            data={"name": "Acme Jewelry Updated", "industry": "luxury jewelry"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["name"], "Acme Jewelry Updated")
+        self.assertEqual(response.json()["industry"], "luxury jewelry")
+
+        response = self.client.post(
+            f"/api/customers/{profile_id}/",
+            data={"name": ""},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_customer_profiles_are_workspace_scoped(self):
+        user, workspace = make_user_workspace()
+        other_user, other_workspace = make_user_workspace("other@example.com")
+        CustomerProfile.objects.create(workspace=other_workspace, name="Other Brand")
+        token = AuthToken.issue_for(user)
+
+        response = self.client.get("/api/customers/", HTTP_AUTHORIZATION=f"Bearer {token}")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"customers": []})
+        self.assertFalse(CustomerProfile.objects.filter(workspace=workspace).exists())
+
+    def test_customer_profile_requires_authentication_and_name(self):
+        response = self.client.get("/api/customers/")
+        self.assertEqual(response.status_code, 401)
+
+        user, _ = make_user_workspace()
+        token = AuthToken.issue_for(user)
+        response = self.client.post("/api/customers/", data={"industry": "food"}, content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {token}")
+        self.assertEqual(response.status_code, 400)

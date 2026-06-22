@@ -1,6 +1,17 @@
 ﻿import { describe, expect, it, vi } from "vitest";
 
-import { estimateAiCredits, fetchAiProviders, fetchCredits, fetchHealth, fetchMe, login, registerWithInvite, submitCreditTask } from "./api";
+import {
+  estimateAiCredits,
+  fetchAiProviders,
+  fetchCredits,
+  fetchCustomers,
+  fetchHealth,
+  fetchMe,
+  login,
+  registerWithInvite,
+  saveCustomer,
+  submitCreditTask,
+} from "./api";
 
 describe("fetchHealth", () => {
   it("reads backend health JSON from the configured API base", async () => {
@@ -136,5 +147,36 @@ describe("AI provider API helpers", () => {
       body: JSON.stringify({ provider_id: 1, base_credits: 40 }),
     });
     expect(result.estimated_credits).toBe(100);
+  });
+});
+
+describe("customer API helpers", () => {
+  it("fetches workspace customer profiles", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ customers: [{ id: 1, name: "Acme", industry: "jewelry" }] }),
+    });
+
+    const result = await fetchCustomers("http://127.0.0.1:8000", "abc", fetchMock);
+
+    expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:8000/api/customers/", {
+      headers: { Authorization: "Bearer abc" },
+    });
+    expect(result.customers[0].name).toBe("Acme");
+  });
+
+  it("creates or updates a customer profile", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: 1, name: "Acme", industry: "jewelry" }),
+    });
+
+    await saveCustomer("http://127.0.0.1:8000", "abc", { id: 1, name: "Acme", industry: "jewelry" }, fetchMock);
+
+    expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:8000/api/customers/1/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer abc" },
+      body: JSON.stringify({ name: "Acme", industry: "jewelry" }),
+    });
   });
 });

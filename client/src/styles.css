@@ -110,6 +110,7 @@ select {
   border: 1px solid rgba(0, 229, 255, .18);
 }
 .credit-card p { margin: 6px 0 0; color: #b7c7e8; }
+.mini-form { display: grid; gap: 8px; margin-top: 10px; }
 .mini-action {
   margin-top: 10px;
   border: 1px solid rgba(0,229,255,.28);

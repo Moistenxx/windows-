@@ -3,6 +3,7 @@
 from .models import (
     AIProvider,
     AuthToken,
+    CustomerProfile,
     CreditAccount,
     CreditLedgerEntry,
     CreditRecharge,
@@ -45,6 +46,13 @@ class AIProviderAdmin(admin.ModelAdmin):
     search_fields = ("name", "model_name")
     # ponytail: v1 keeps keys server-side in admin only; encrypt when real provider billing starts.
     readonly_fields = ("created_at",)
+
+
+@admin.register(CustomerProfile)
+class CustomerProfileAdmin(admin.ModelAdmin):
+    list_display = ("workspace", "name", "industry", "updated_at")
+    search_fields = ("workspace__name", "name", "industry", "products", "selling_points")
+    readonly_fields = ("created_at", "updated_at")
 
 
 @admin.register(CreditAccount)

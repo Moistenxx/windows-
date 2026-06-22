@@ -144,6 +144,39 @@ class AIProvider(models.Model):
         return f"{self.capability} {self.name} ({self.model_name})"
 
 
+class CustomerProfile(models.Model):
+    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name="customer_profiles")
+    name = models.CharField(max_length=160)
+    industry = models.CharField(max_length=120, blank=True)
+    products = models.TextField(blank=True)
+    target_audience = models.TextField(blank=True)
+    selling_points = models.TextField(blank=True)
+    forbidden_words = models.TextField(blank=True)
+    contact_hooks = models.TextField(blank=True)
+    style_preference = models.TextField(blank=True)
+    logo_or_common_assets = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def public_payload(self):
+        return {
+            "id": self.id,
+            "workspace_id": self.workspace_id,
+            "name": self.name,
+            "industry": self.industry,
+            "products": self.products,
+            "target_audience": self.target_audience,
+            "selling_points": self.selling_points,
+            "forbidden_words": self.forbidden_words,
+            "contact_hooks": self.contact_hooks,
+            "style_preference": self.style_preference,
+            "logo_or_common_assets": self.logo_or_common_assets,
+        }
+
+    def __str__(self):
+        return f"{self.workspace.name} {self.name}"
+
+
 class CreditAccount(models.Model):
     workspace = models.OneToOneField(Workspace, on_delete=models.CASCADE, related_name="credit_account")
     balance = models.PositiveIntegerField(default=0)

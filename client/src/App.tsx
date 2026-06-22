@@ -5,14 +5,17 @@ import {
   estimateAiCredits,
   fetchAiProviders,
   fetchCredits,
+  fetchCustomers,
   fetchHealth,
   fetchMe,
   login,
   registerWithInvite,
+  saveCustomer,
   submitCreditTask,
   type AiProvider,
   type AuthPayload,
   type CreditPayload,
+  type CustomerProfile,
   type HealthPayload,
   type MePayload,
 } from "./api";
@@ -36,6 +39,12 @@ type ProviderState =
   | { status: "idle" }
   | { status: "loading" }
   | { status: "ready"; providers: AiProvider[]; selectedId: number | null; estimate?: number }
+  | { status: "error"; message: string };
+
+type CustomerState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "ready"; customers: CustomerProfile[]; selectedId: number | null }
   | { status: "error"; message: string };
 
 type AuthState =
@@ -62,6 +71,8 @@ export function App() {
   const [auth, setAuth] = useState<AuthState>({ status: "anonymous" });
   const [credits, setCredits] = useState<CreditState>({ status: "idle" });
   const [providers, setProviders] = useState<ProviderState>({ status: "idle" });
+  const [customers, setCustomers] = useState<CustomerState>({ status: "idle" });
+  const [customerForm, setCustomerForm] = useState<CustomerProfile>({ name: "", industry: "", products: "", selling_points: "" });
   const [taskMessage, setTaskMessage] = useState("");
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("owner@example.com");
@@ -103,6 +114,7 @@ export function App() {
     if (auth.status !== "authenticated") {
       setCredits({ status: "idle" });
       setProviders({ status: "idle" });
+      setCustomers({ status: "idle" });
       return;
     }
     setCredits({ status: "loading" });
@@ -117,6 +129,17 @@ export function App() {
         selectedId: payload.providers[0]?.id ?? null,
       }))
       .catch((error) => setProviders({ status: "error", message: error instanceof Error ? error.message : "Provider load failed" }));
+    setCustomers({ status: "loading" });
+    fetchCustomers(apiBase, auth.token)
+      .then((payload) => {
+        if (payload.customers[0]) setCustomerForm(payload.customers[0]);
+        setCustomers({
+          status: "ready",
+          customers: payload.customers,
+          selectedId: payload.customers[0]?.id ?? null,
+        });
+      })
+      .catch((error) => setCustomers({ status: "error", message: error instanceof Error ? error.message : "Customer load failed" }));
   }, [auth]);
 
   async function submit(event: FormEvent) {
@@ -162,6 +185,24 @@ export function App() {
     setProviders({ ...providers, selectedId: providerId, estimate: payload.estimated_credits });
   }
 
+  function selectCustomer(customerId: number) {
+    if (customers.status !== "ready") return;
+    const customer = customers.customers.find((item) => item.id === customerId);
+    if (customer) setCustomerForm(customer);
+    setCustomers({ ...customers, selectedId: customerId });
+  }
+
+  async function submitCustomer(event: FormEvent) {
+    event.preventDefault();
+    if (auth.status !== "authenticated") return;
+    const saved = await saveCustomer(apiBase, auth.token, customerForm);
+    if (customers.status === "ready") {
+      const rest = customers.customers.filter((item) => item.id !== saved.id);
+      setCustomers({ status: "ready", customers: [saved, ...rest], selectedId: saved.id ?? null });
+    }
+    setCustomerForm(saved);
+  }
+
   return (
     <main className="app-shell">
       <section className="hero-card">
@@ -203,6 +244,31 @@ export function App() {
                 {credits.status === "idle" && <p>登录后显示</p>}
                 <button className="mini-action" onClick={submitDemoTask}>提交 120 积分测试任务</button>
                 {taskMessage && <p>{taskMessage}</p>}
+              </div>
+              <div className="credit-card">
+                <b>客户/品牌档案</b>
+                {customers.status === "loading" && <p>客户加载中...</p>}
+                {customers.status === "error" && <p>{customers.message}</p>}
+                {customers.status === "ready" && customers.customers.length > 0 && (
+                  <select value={customers.selectedId ?? ""} onChange={(event) => selectCustomer(Number(event.target.value))}>
+                    {customers.customers.map((customer) => (
+                      <option key={customer.id} value={customer.id}>{customer.name} · {customer.industry || "未填行业"}</option>
+                    ))}
+                  </select>
+                )}
+                <form className="mini-form" onSubmit={submitCustomer}>
+                  <input placeholder="客户/品牌名称" value={customerForm.name} onChange={(event) => setCustomerForm({ ...customerForm, name: event.target.value })} />
+                  <input placeholder="行业" value={customerForm.industry ?? ""} onChange={(event) => setCustomerForm({ ...customerForm, industry: event.target.value })} />
+                  <input placeholder="产品/服务" value={customerForm.products ?? ""} onChange={(event) => setCustomerForm({ ...customerForm, products: event.target.value })} />
+                  <input placeholder="目标人群" value={customerForm.target_audience ?? ""} onChange={(event) => setCustomerForm({ ...customerForm, target_audience: event.target.value })} />
+                  <input placeholder="核心卖点" value={customerForm.selling_points ?? ""} onChange={(event) => setCustomerForm({ ...customerForm, selling_points: event.target.value })} />
+                  <input placeholder="禁用词/不能说的话" value={customerForm.forbidden_words ?? ""} onChange={(event) => setCustomerForm({ ...customerForm, forbidden_words: event.target.value })} />
+                  <input placeholder="联系方式/引流话术" value={customerForm.contact_hooks ?? ""} onChange={(event) => setCustomerForm({ ...customerForm, contact_hooks: event.target.value })} />
+                  <input placeholder="文案风格偏好" value={customerForm.style_preference ?? ""} onChange={(event) => setCustomerForm({ ...customerForm, style_preference: event.target.value })} />
+                  <input placeholder="Logo/常用素材备注" value={customerForm.logo_or_common_assets ?? ""} onChange={(event) => setCustomerForm({ ...customerForm, logo_or_common_assets: event.target.value })} />
+                  <button className="mini-action">保存档案</button>
+                </form>
+                {customers.status === "ready" && customers.selectedId && <p>项目创建将使用当前选中的客户档案。</p>}
               </div>
               <div className="credit-card">
                 <b>高级模型</b>

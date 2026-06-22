@@ -14,4 +14,6 @@ urlpatterns = [
     path("api/ai/providers/", views.ai_providers, name="ai_providers"),
     path("api/ai/estimate/", views.ai_estimate, name="ai_estimate"),
     path("api/ai/fake-call/", views.ai_fake_call, name="ai_fake_call"),
+    path("api/customers/", views.customers, name="customers"),
+    path("api/customers/<int:customer_id>/", views.customer_detail, name="customer_detail"),
 ]
