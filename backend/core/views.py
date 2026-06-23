@@ -14,12 +14,14 @@ from .models import (
     AIProvider,
     Asset,
     AuthToken,
+    ConcurrencyLimitReached,
     CreditAccount,
     CreditTask,
     CustomerProfile,
     InsufficientCredits,
     IndustryTemplate,
     InvitationCode,
+    Job,
     ScriptDraft,
     ViralSample,
     Workspace,
@@ -211,6 +213,71 @@ def require_user(request):
     if first_membership(user) is None:
         return None, error("Workspace required", status=409)
     return user, None
+
+
+def job_list_payload(workspace):
+    jobs = Job.objects.filter(workspace=workspace).order_by("-created_at", "id")
+    return {
+        "jobs": [job.public_payload() for job in jobs],
+        "concurrency_limits": {
+            "global": Job.GLOBAL_RUNNING_LIMIT,
+            "workspace": Job.WORKSPACE_RUNNING_LIMIT,
+        },
+    }
+
+
+@csrf_exempt
+def jobs(request):
+    user, auth_error = require_user(request)
+    if auth_error:
+        return auth_error
+    workspace = first_membership(user).workspace
+    if request.method == "GET":
+        return JsonResponse(job_list_payload(workspace))
+    if request.method != "POST":
+        return error("GET or POST required", status=405)
+    data = read_json(request)
+    try:
+        job = Job.submit(
+            workspace,
+            user,
+            int(data.get("estimated_credits", 0)),
+            title=str(data.get("title") or "Render job").strip()[:160],
+        )
+    except (TypeError, ValueError):
+        return error("Positive estimated_credits required")
+    except InsufficientCredits:
+        return error("Insufficient credits", status=402)
+    return JsonResponse({"job": job.public_payload(), "credits": credit_payload(workspace)}, status=201)
+
+
+@csrf_exempt
+def job_transition(request, job_id):
+    if request.method != "POST":
+        return error("POST required", status=405)
+    user, auth_error = require_user(request)
+    if auth_error:
+        return auth_error
+    workspace = first_membership(user).workspace
+    try:
+        job = Job.objects.get(id=job_id, workspace=workspace)
+    except Job.DoesNotExist:
+        return error("Job not found", status=404)
+    data = read_json(request)
+    try:
+        if data.get("status") == Job.RUNNING:
+            job.start(str(data.get("current_step") or ""))
+        elif data.get("status") == Job.SUCCEEDED:
+            job.succeed()
+        elif data.get("status") == Job.FAILED:
+            job.fail(data.get("error_message") or "")
+        else:
+            return error("Supported status required")
+    except ConcurrencyLimitReached:
+        return JsonResponse({"error": "Concurrency limit reached", "job": job.public_payload(), "credits": credit_payload(workspace)}, status=409)
+    except ValueError as exc:
+        return error(str(exc))
+    return JsonResponse({"job": job.public_payload(), "credits": credit_payload(workspace)})
 
 
 def ai_providers(request):

@@ -17,6 +17,7 @@ from core.models import (
     AIProvider,
     InsufficientCredits,
     InvitationCode,
+    Job,
     Workspace,
     WorkspaceMembership,
 )
@@ -62,6 +63,7 @@ class AdminEntryTests(TestCase):
         self.assertTrue(admin.site.is_registered(IndustryTemplate))
         self.assertTrue(admin.site.is_registered(ViralSample))
         self.assertTrue(admin.site.is_registered(ScriptDraft))
+        self.assertTrue(admin.site.is_registered(Job))
 
 
 class AuthApiTests(TestCase):
@@ -668,3 +670,66 @@ class ScriptGenerationTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 400)
+
+
+class JobLifecycleTests(TestCase):
+    def test_user_creates_lists_and_moves_paid_job_through_lifecycle(self):
+        user, workspace = make_user_workspace()
+        CreditRecharge.objects.create(workspace=workspace, amount=500)
+        token = AuthToken.issue_for(user)
+
+        response = self.client.post(
+            "/api/jobs/",
+            data={"title": "render 9:16", "estimated_credits": 120},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        job = response.json()["job"]
+        self.assertEqual(job["status"], "pending")
+        self.assertEqual(job["steps"], ["script", "subtitle", "voiceover", "clipping", "export"])
+        self.assertEqual(response.json()["credits"], {"workspace_id": workspace.id, "balance": 380, "frozen": 120})
+
+        response = self.client.get("/api/jobs/", HTTP_AUTHORIZATION=f"Bearer {token}")
+        self.assertEqual(response.json()["jobs"][0]["id"], job["id"])
+
+        response = self.client.post(
+            f"/api/jobs/{job['id']}/transition/",
+            data={"status": "running", "current_step": "subtitle"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["job"]["status"], "running")
+        self.assertEqual(response.json()["job"]["current_step"], "subtitle")
+
+        response = self.client.post(
+            f"/api/jobs/{job['id']}/transition/",
+            data={"status": "succeeded"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["job"]["status"], "succeeded")
+        self.assertEqual(response.json()["credits"], {"workspace_id": workspace.id, "balance": 380, "frozen": 0})
+
+    def test_concurrency_keeps_extra_jobs_pending_and_failed_jobs_refund(self):
+        user, workspace = make_user_workspace()
+        CreditRecharge.objects.create(workspace=workspace, amount=500)
+        token = AuthToken.issue_for(user)
+        first = self.client.post("/api/jobs/", data={"title": "first", "estimated_credits": 100}, content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {token}").json()["job"]
+        second = self.client.post("/api/jobs/", data={"title": "second", "estimated_credits": 100}, content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {token}").json()["job"]
+
+        self.client.post(f"/api/jobs/{first['id']}/transition/", data={"status": "running"}, content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {token}")
+        response = self.client.post(f"/api/jobs/{second['id']}/transition/", data={"status": "running"}, content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {token}")
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["job"]["status"], "pending")
+        self.assertGreater(response.json()["job"]["estimated_wait_seconds"], 0)
+
+        response = self.client.post(f"/api/jobs/{first['id']}/transition/", data={"status": "failed"}, content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {token}")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["job"]["status"], "failed")
+        self.assertEqual(response.json()["credits"], {"workspace_id": workspace.id, "balance": 400, "frozen": 100})

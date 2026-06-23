@@ -10,6 +10,7 @@ import {
   fetchCredits,
   fetchCustomers,
   fetchHealth,
+  fetchJobs,
   fetchMe,
   fetchScriptAssets,
   generateScripts,
@@ -18,7 +19,9 @@ import {
   saveCustomer,
   saveViralSample,
   confirmScript,
+  createJob,
   submitCreditTask,
+  transitionJob,
   updateAssetTags,
 } from "./api";
 
@@ -318,5 +321,35 @@ describe("script generation API helpers", () => {
     });
     expect(draft.render_ready).toBe(false);
     expect(confirmed.render_ready).toBe(true);
+  });
+});
+
+describe("job API helpers", () => {
+  it("creates, lists, and transitions queued jobs", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ job: { id: 1, status: "pending" }, credits: { balance: 380, frozen: 120 } }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ jobs: [{ id: 1, status: "pending" }], concurrency_limits: { global: 2, workspace: 1 } }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ job: { id: 1, status: "running" }, credits: { balance: 380, frozen: 120 } }) });
+
+    await createJob("http://127.0.0.1:8000", "abc", { title: "render", estimatedCredits: 120 }, fetchMock);
+    const list = await fetchJobs("http://127.0.0.1:8000", "abc", fetchMock);
+    const running = await transitionJob("http://127.0.0.1:8000", "abc", 1, "running", "subtitle", fetchMock);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "http://127.0.0.1:8000/api/jobs/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer abc" },
+      body: JSON.stringify({ title: "render", estimated_credits: 120 }),
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "http://127.0.0.1:8000/api/jobs/", {
+      headers: { Authorization: "Bearer abc" },
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "http://127.0.0.1:8000/api/jobs/1/transition/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer abc" },
+      body: JSON.stringify({ status: "running", current_step: "subtitle" }),
+    });
+    expect(list.concurrency_limits.workspace).toBe(1);
+    expect(running.job.status).toBe("running");
   });
 });

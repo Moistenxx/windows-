@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useState } from "react";
 
 import {
   createAssetUpload,
+  createJob,
   contentTypeFor,
   deleteAsset,
   defaultApiBase,
@@ -11,6 +12,7 @@ import {
   fetchCredits,
   fetchCustomers,
   fetchHealth,
+  fetchJobs,
   fetchScriptAssets,
   fetchMe,
   confirmScript,
@@ -20,6 +22,7 @@ import {
   saveCustomer,
   saveViralSample,
   submitCreditTask,
+  transitionJob,
   updateAssetTags,
   type AiProvider,
   type Asset,
@@ -28,6 +31,7 @@ import {
   type CustomerProfile,
   type HealthPayload,
   type IndustryTemplate,
+  type JobsPayload,
   type MePayload,
   type ScriptDraftPayload,
   type ViralSample,
@@ -46,6 +50,12 @@ type CreditState =
   | { status: "idle" }
   | { status: "loading" }
   | { status: "ready"; payload: CreditPayload }
+  | { status: "error"; message: string };
+
+type JobState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "ready"; payload: JobsPayload; message?: string }
   | { status: "error"; message: string };
 
 type ProviderState =
@@ -101,6 +111,7 @@ export function App() {
   const [health, setHealth] = useState<HealthState>({ status: "loading" });
   const [auth, setAuth] = useState<AuthState>({ status: "anonymous" });
   const [credits, setCredits] = useState<CreditState>({ status: "idle" });
+  const [jobs, setJobs] = useState<JobState>({ status: "idle" });
   const [providers, setProviders] = useState<ProviderState>({ status: "idle" });
   const [customers, setCustomers] = useState<CustomerState>({ status: "idle" });
   const [assets, setAssets] = useState<AssetState>({ status: "idle" });
@@ -151,6 +162,7 @@ export function App() {
   useEffect(() => {
     if (auth.status !== "authenticated") {
       setCredits({ status: "idle" });
+      setJobs({ status: "idle" });
       setProviders({ status: "idle" });
       setCustomers({ status: "idle" });
       setAssets({ status: "idle" });
@@ -164,6 +176,10 @@ export function App() {
     fetchCredits(apiBase, auth.token)
       .then((payload) => setCredits({ status: "ready", payload }))
       .catch((error) => setCredits({ status: "error", message: error instanceof Error ? error.message : "Credit load failed" }));
+    setJobs({ status: "loading" });
+    fetchJobs(apiBase, auth.token)
+      .then((payload) => setJobs({ status: "ready", payload }))
+      .catch((error) => setJobs({ status: "error", message: error instanceof Error ? error.message : "Job load failed" }));
     setProviders({ status: "loading" });
     fetchAiProviders(apiBase, auth.token)
       .then((payload) => setProviders({
@@ -231,6 +247,37 @@ export function App() {
       setTaskMessage(`任务 #${payload.task.id} 已冻结 ${payload.task.estimated_credits} 积分`);
     } catch (error) {
       setTaskMessage(error instanceof Error ? error.message : "Task submit failed");
+    }
+  }
+
+  function upsertJobList(payload: JobsPayload, job: JobsPayload["jobs"][number]): JobsPayload {
+    return { ...payload, jobs: [job, ...payload.jobs.filter((item) => item.id !== job.id)] };
+  }
+
+  async function submitDemoJob() {
+    if (auth.status !== "authenticated") return;
+    setTaskMessage("正在创建队列任务...");
+    try {
+      const payload = await createJob(apiBase, auth.token, { title: "9:16 render smoke job", estimatedCredits: 120 });
+      setCredits({ status: "ready", payload: payload.credits });
+      setJobs((state) => state.status === "ready"
+        ? { status: "ready", payload: upsertJobList(state.payload, payload.job), message: "任务已进入队列" }
+        : state);
+      setTaskMessage(`任务 #${payload.job.id} 已排队`);
+    } catch (error) {
+      setTaskMessage(error instanceof Error ? error.message : "Job create failed");
+    }
+  }
+
+  async function moveJob(jobId: number, status: string, currentStep = "") {
+    if (auth.status !== "authenticated" || jobs.status !== "ready") return;
+    try {
+      const payload = await transitionJob(apiBase, auth.token, jobId, status, currentStep);
+      setCredits({ status: "ready", payload: payload.credits });
+      setJobs({ status: "ready", payload: upsertJobList(jobs.payload, payload.job), message: `任务已变为 ${payload.job.status}` });
+    } catch (error) {
+      const payload = await fetchJobs(apiBase, auth.token);
+      setJobs({ status: "ready", payload, message: error instanceof Error ? error.message : "Job transition failed" });
     }
   }
 
@@ -395,6 +442,29 @@ export function App() {
                 {credits.status === "idle" && <p>登录后显示</p>}
                 <button className="mini-action" onClick={submitDemoTask}>提交 120 积分测试任务</button>
                 {taskMessage && <p>{taskMessage}</p>}
+              </div>
+              <div className="credit-card">
+                <b>任务队列</b>
+                <p>并发限制：{jobs.status === "ready" ? `全局 ${jobs.payload.concurrency_limits.global} / workspace ${jobs.payload.concurrency_limits.workspace}` : "加载中"}</p>
+                <button className="mini-action" onClick={submitDemoJob}>创建 120 积分渲染任务</button>
+                {jobs.status === "loading" && <p>任务加载中...</p>}
+                {jobs.status === "error" && <p>{jobs.message}</p>}
+                {jobs.status === "ready" && jobs.message && <p>{jobs.message}</p>}
+                {jobs.status === "ready" && jobs.payload.jobs.length === 0 && <p>暂无任务</p>}
+                {jobs.status === "ready" && jobs.payload.jobs.length > 0 && (
+                  <ul className="workspace-list">
+                    {jobs.payload.jobs.map((job) => (
+                      <li key={job.id}>
+                        <div>
+                          #{job.id} {job.title} <span>{job.status} · {job.current_step || "等待"} · 预计等待 {job.estimated_wait_seconds}s</span>
+                        </div>
+                        {job.status === "pending" && <button className="mini-action" onClick={() => moveJob(job.id, "running", "script")}>开始</button>}
+                        {job.status === "running" && <button className="mini-action" onClick={() => moveJob(job.id, "succeeded")}>完成</button>}
+                        {["pending", "running"].includes(job.status) && <button className="mini-action" onClick={() => moveJob(job.id, "failed")}>失败退款</button>}
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
               <div className="credit-card">
                 <b>客户/品牌档案</b>

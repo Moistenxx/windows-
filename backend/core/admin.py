@@ -11,6 +11,7 @@ from .models import (
     CreditTask,
     IndustryTemplate,
     InvitationCode,
+    Job,
     ScriptDraft,
     ViralSample,
     Workspace,
@@ -122,3 +123,10 @@ class CreditTaskAdmin(admin.ModelAdmin):
     list_filter = ("status",)
     search_fields = ("workspace__name", "title", "created_by__username")
     readonly_fields = ("workspace", "created_by", "title", "estimated_credits", "status", "created_at", "completed_at")
+
+@admin.register(Job)
+class JobAdmin(admin.ModelAdmin):
+    list_display = ("workspace", "title", "status", "current_step", "estimated_wait_seconds", "created_at")
+    list_filter = ("status", "current_step")
+    search_fields = ("workspace__name", "title")
+    readonly_fields = ("created_at", "updated_at")

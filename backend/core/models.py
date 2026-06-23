@@ -14,6 +14,10 @@ class InsufficientCredits(Exception):
     pass
 
 
+class ConcurrencyLimitReached(Exception):
+    pass
+
+
 def require_positive_credits(amount):
     if amount <= 0:
         raise ValueError("Credit amount must be positive")
@@ -386,6 +390,104 @@ class CreditTask(models.Model):
             self.status = task.status
             self.completed_at = task.completed_at
             return task
+
+    def __str__(self):
+        return f"{self.workspace.name} {self.title} {self.status}"
+
+
+class Job(models.Model):
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    STATUS_CHOICES = [
+        (PENDING, "Pending"),
+        (RUNNING, "Running"),
+        (SUCCEEDED, "Succeeded"),
+        (FAILED, "Failed"),
+    ]
+    DEFAULT_STEPS = ["script", "subtitle", "voiceover", "clipping", "export"]
+    GLOBAL_RUNNING_LIMIT = 2
+    WORKSPACE_RUNNING_LIMIT = 1
+
+    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name="jobs")
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="jobs")
+    credit_task = models.ForeignKey(CreditTask, on_delete=models.SET_NULL, null=True, blank=True, related_name="jobs")
+    title = models.CharField(max_length=160, default="Render job")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=PENDING)
+    steps = models.JSONField(default=list, blank=True)
+    current_step = models.CharField(max_length=40, blank=True)
+    estimated_wait_seconds = models.PositiveIntegerField(default=0)
+    error_message = models.CharField(max_length=240, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    @classmethod
+    def submit(cls, workspace, created_by, estimated_credits, title="Render job"):
+        with transaction.atomic():
+            credit_task = CreditTask.submit(workspace, created_by, estimated_credits, title=title)
+            running = cls.objects.filter(workspace=workspace, status=cls.RUNNING).count()
+            pending = cls.objects.filter(workspace=workspace, status=cls.PENDING).count()
+            return cls.objects.create(
+                workspace=workspace,
+                created_by=created_by,
+                credit_task=credit_task,
+                title=(title or "Render job")[:160],
+                steps=cls.DEFAULT_STEPS,
+                current_step=cls.DEFAULT_STEPS[0],
+                estimated_wait_seconds=(running + pending) * 60,
+            )
+
+    def start(self, current_step=""):
+        if self.status != self.PENDING:
+            raise ValueError("Only pending jobs can start")
+        # ponytail: naive counts are enough for v1; use DB locks or a worker queue when real concurrency matters.
+        if (
+            type(self).objects.filter(status=self.RUNNING).count() >= self.GLOBAL_RUNNING_LIMIT
+            or type(self).objects.filter(workspace=self.workspace, status=self.RUNNING).count() >= self.WORKSPACE_RUNNING_LIMIT
+        ):
+            self.estimated_wait_seconds = max(self.estimated_wait_seconds, 60)
+            self.save(update_fields=["estimated_wait_seconds", "updated_at"])
+            raise ConcurrencyLimitReached("Concurrency limit reached")
+        self.status = self.RUNNING
+        self.current_step = current_step if current_step in self.steps else self.steps[0]
+        self.estimated_wait_seconds = 0
+        self.save(update_fields=["status", "current_step", "estimated_wait_seconds", "updated_at"])
+        return self
+
+    def succeed(self):
+        if self.status != self.RUNNING:
+            raise ValueError("Only running jobs can succeed")
+        if self.credit_task:
+            self.credit_task.mark_succeeded()
+        self.status = self.SUCCEEDED
+        self.current_step = self.steps[-1]
+        self.save(update_fields=["status", "current_step", "updated_at"])
+        return self
+
+    def fail(self, message=""):
+        if self.status not in {self.PENDING, self.RUNNING}:
+            raise ValueError("Only active jobs can fail")
+        if self.credit_task:
+            self.credit_task.mark_failed()
+        self.status = self.FAILED
+        self.error_message = str(message or "")[:240]
+        self.save(update_fields=["status", "error_message", "updated_at"])
+        return self
+
+    def public_payload(self):
+        return {
+            "id": self.id,
+            "workspace_id": self.workspace_id,
+            "title": self.title,
+            "status": self.status,
+            "steps": self.steps,
+            "current_step": self.current_step,
+            "estimated_wait_seconds": self.estimated_wait_seconds,
+            "error_message": self.error_message,
+            "credit_task_id": self.credit_task_id,
+            "created_at": self.created_at.isoformat(),
+        }
 
     def __str__(self):
         return f"{self.workspace.name} {self.title} {self.status}"

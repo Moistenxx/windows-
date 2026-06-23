@@ -26,6 +26,24 @@ export type CreditTaskPayload = {
   credits: CreditPayload;
 };
 
+export type JobPayload = {
+  id: number;
+  workspace_id?: number;
+  title: string;
+  status: string;
+  steps: string[];
+  current_step: string;
+  estimated_wait_seconds: number;
+  error_message?: string;
+  credit_task_id?: number;
+  created_at?: string;
+};
+export type JobsPayload = {
+  jobs: JobPayload[];
+  concurrency_limits: { global: number; workspace: number };
+};
+export type JobMutationPayload = { job: JobPayload; credits: CreditPayload };
+
 export type AiProvider = {
   id: number;
   capability: string;
@@ -219,6 +237,55 @@ export async function submitCreditTask(
       title: input.title,
       estimated_credits: input.estimatedCredits,
     }),
+  });
+  return readJson(response);
+}
+
+export async function fetchJobs(
+  apiBase: string,
+  token: string,
+  fetcher: Fetcher = fetch,
+): Promise<JobsPayload> {
+  const response = await fetcher<JobsPayload>(apiUrl(apiBase, "/api/jobs/"), {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return readJson(response);
+}
+
+export async function createJob(
+  apiBase: string,
+  token: string,
+  input: { title: string; estimatedCredits: number },
+  fetcher: Fetcher = fetch,
+): Promise<JobMutationPayload> {
+  const response = await fetcher<JobMutationPayload>(apiUrl(apiBase, "/api/jobs/"), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ title: input.title, estimated_credits: input.estimatedCredits }),
+  });
+  return readJson(response);
+}
+
+export async function transitionJob(
+  apiBase: string,
+  token: string,
+  jobId: number,
+  status: string,
+  currentStep = "",
+  fetcher: Fetcher = fetch,
+): Promise<JobMutationPayload> {
+  const body: { status: string; current_step?: string } = { status };
+  if (currentStep) body.current_step = currentStep;
+  const response = await fetcher<JobMutationPayload>(apiUrl(apiBase, `/api/jobs/${jobId}/transition/`), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(body),
   });
   return readJson(response);
 }
