@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import PurePath
 
 from django.contrib.auth import authenticate
@@ -226,6 +227,27 @@ def job_list_payload(workspace):
     }
 
 
+def fake_subtitle_cues(text):
+    parts = [part.strip() for part in re.split(r"[。！？.!?\n]+", text) if part.strip()]
+    return [{"start": index * 2, "end": index * 2 + 2, "text": part[:200]} for index, part in enumerate(parts or [text.strip()])]
+
+
+def clean_subtitles(value):
+    if not isinstance(value, list):
+        raise ValueError("subtitles must be a list")
+    subtitles = []
+    for index, cue in enumerate(value):
+        if not isinstance(cue, dict):
+            raise ValueError("subtitle cue must be an object")
+        start = float(cue.get("start", index * 2))
+        end = float(cue.get("end", start + 2))
+        text = str(cue.get("text") or "").strip()
+        if not text or end <= start:
+            raise ValueError("Valid subtitle text and timing required")
+        subtitles.append({"start": start, "end": end, "text": text[:200]})
+    return subtitles
+
+
 @csrf_exempt
 def jobs(request):
     user, auth_error = require_user(request)
@@ -277,6 +299,73 @@ def job_transition(request, job_id):
         return JsonResponse({"error": "Concurrency limit reached", "job": job.public_payload(), "credits": credit_payload(workspace)}, status=409)
     except ValueError as exc:
         return error(str(exc))
+    return JsonResponse({"job": job.public_payload(), "credits": credit_payload(workspace)})
+
+
+@csrf_exempt
+def job_voiceover(request, job_id):
+    if request.method != "POST":
+        return error("POST required", status=405)
+    user, auth_error = require_user(request)
+    if auth_error:
+        return auth_error
+    workspace = first_membership(user).workspace
+    try:
+        job = Job.objects.get(id=job_id, workspace=workspace)
+    except Job.DoesNotExist:
+        return error("Job not found", status=404)
+    data = read_json(request)
+    mode = str(data.get("mode") or Job.VOICEOVER_NONE).strip()
+    try:
+        if mode == Job.VOICEOVER_NONE:
+            job.voiceover_mode = Job.VOICEOVER_NONE
+            job.voiceover_provider = None
+            job.source_audio_asset = None
+            job.audio_placeholder = ""
+        elif mode == Job.VOICEOVER_TTS:
+            provider = AIProvider.objects.get(id=int(data.get("provider_id")), enabled=True, capability=AIProvider.TTS)
+            script = str(data.get("script") or "").strip()
+            if not script:
+                raise ValueError
+            job.voiceover_mode = Job.VOICEOVER_TTS
+            job.voiceover_provider = provider
+            job.source_audio_asset = None
+            job.audio_placeholder = f"local://jobs/{job.id}/voiceover/{provider.model_name}.mp3"
+            job.subtitles = fake_subtitle_cues(script)
+        elif mode == Job.VOICEOVER_ASR:
+            provider = AIProvider.objects.get(id=int(data.get("provider_id")), enabled=True, capability=AIProvider.ASR)
+            asset = Asset.objects.get(id=int(data.get("asset_id")), workspace=workspace, asset_type__in=[Asset.AUDIO, Asset.VIDEO], deleted_at__isnull=True)
+            job.voiceover_mode = Job.VOICEOVER_ASR
+            job.voiceover_provider = provider
+            job.source_audio_asset = asset
+            job.audio_placeholder = ""
+            job.subtitles = [{"start": 0, "end": 2, "text": f"ASR subtitles for {asset.filename}"}]
+        else:
+            return error("Supported voiceover mode required")
+        if "subtitles" in data:
+            job.subtitles = clean_subtitles(data.get("subtitles"))
+    except (AIProvider.DoesNotExist, Asset.DoesNotExist, TypeError, ValueError):
+        return error("Valid voiceover mode, provider, script, asset and subtitles required")
+    job.save(update_fields=["voiceover_mode", "voiceover_provider", "source_audio_asset", "audio_placeholder", "subtitles", "updated_at"])
+    return JsonResponse({"job": job.public_payload(), "credits": credit_payload(workspace)})
+
+
+@csrf_exempt
+def job_subtitles(request, job_id):
+    if request.method != "POST":
+        return error("POST required", status=405)
+    user, auth_error = require_user(request)
+    if auth_error:
+        return auth_error
+    workspace = first_membership(user).workspace
+    try:
+        job = Job.objects.get(id=job_id, workspace=workspace)
+        job.subtitles = clean_subtitles(read_json(request).get("subtitles"))
+    except Job.DoesNotExist:
+        return error("Job not found", status=404)
+    except (TypeError, ValueError) as exc:
+        return error(str(exc))
+    job.save(update_fields=["subtitles", "updated_at"])
     return JsonResponse({"job": job.public_payload(), "credits": credit_payload(workspace)})
 
 

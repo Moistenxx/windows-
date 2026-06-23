@@ -733,3 +733,63 @@ class JobLifecycleTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["job"]["status"], "failed")
         self.assertEqual(response.json()["credits"], {"workspace_id": workspace.id, "balance": 400, "frozen": 100})
+
+
+class VoiceoverSubtitleTests(TestCase):
+    def test_job_stores_no_voiceover_tts_subtitles_and_user_edits_subtitles(self):
+        user, workspace = make_user_workspace()
+        CreditRecharge.objects.create(workspace=workspace, amount=500)
+        provider = AIProvider.objects.create(capability=AIProvider.TTS, name="Fake TTS", model_name="fake-tts", enabled=True)
+        token = AuthToken.issue_for(user)
+        job = self.client.post("/api/jobs/", data={"title": "voice job", "estimated_credits": 100}, content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {token}").json()["job"]
+
+        response = self.client.post(
+            f"/api/jobs/{job['id']}/voiceover/",
+            data={"mode": "none"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["job"]["voiceover_mode"], "none")
+
+        response = self.client.post(
+            f"/api/jobs/{job['id']}/voiceover/",
+            data={"mode": "tts", "provider_id": provider.id, "script": "First hook. Second CTA."},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()["job"]
+        self.assertEqual(payload["voiceover_mode"], "tts")
+        self.assertIn("fake-tts", payload["audio_placeholder"])
+        self.assertEqual([cue["text"] for cue in payload["subtitles"]], ["First hook", "Second CTA"])
+
+        response = self.client.post(
+            f"/api/jobs/{job['id']}/subtitles/",
+            data={"subtitles": [{"start": 0, "end": 2, "text": "edited subtitle"}]},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["job"]["subtitles"][0]["text"], "edited subtitle")
+
+    def test_fake_asr_provider_generates_subtitles_from_source_audio_asset(self):
+        user, workspace = make_user_workspace()
+        CreditRecharge.objects.create(workspace=workspace, amount=500)
+        provider = AIProvider.objects.create(capability=AIProvider.ASR, name="Fake ASR", model_name="fake-asr", enabled=True)
+        asset = Asset.objects.create(workspace=workspace, uploaded_by=user, filename="source.wav", content_type="audio/wav", asset_type=Asset.AUDIO, object_key="source")
+        token = AuthToken.issue_for(user)
+        job = self.client.post("/api/jobs/", data={"title": "asr job", "estimated_credits": 100}, content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {token}").json()["job"]
+
+        response = self.client.post(
+            f"/api/jobs/{job['id']}/voiceover/",
+            data={"mode": "asr", "provider_id": provider.id, "asset_id": asset.id},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()["job"]
+        self.assertEqual(payload["voiceover_mode"], "asr")
+        self.assertEqual(payload["source_audio_asset_id"], asset.id)
+        self.assertIn("source.wav", payload["subtitles"][0]["text"])

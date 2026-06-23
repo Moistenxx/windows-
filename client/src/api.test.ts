@@ -20,8 +20,10 @@ import {
   saveViralSample,
   confirmScript,
   createJob,
+  configureJobVoiceover,
   submitCreditTask,
   transitionJob,
+  updateJobSubtitles,
   updateAssetTags,
 } from "./api";
 
@@ -351,5 +353,29 @@ describe("job API helpers", () => {
     });
     expect(list.concurrency_limits.workspace).toBe(1);
     expect(running.job.status).toBe("running");
+  });
+});
+
+describe("voiceover and subtitle API helpers", () => {
+  it("configures job voiceover and edits subtitles", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ job: { id: 1, voiceover_mode: "tts", subtitles: [] }, credits: { balance: 1, frozen: 0 } }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ job: { id: 1, subtitles: [{ text: "edited" }] }, credits: { balance: 1, frozen: 0 } }) });
+
+    await configureJobVoiceover("http://127.0.0.1:8000", "abc", 1, { mode: "tts", providerId: 2, script: "hello" }, fetchMock);
+    const edited = await updateJobSubtitles("http://127.0.0.1:8000", "abc", 1, [{ start: 0, end: 2, text: "edited" }], fetchMock);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "http://127.0.0.1:8000/api/jobs/1/voiceover/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer abc" },
+      body: JSON.stringify({ mode: "tts", provider_id: 2, script: "hello", asset_id: undefined, subtitles: undefined }),
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "http://127.0.0.1:8000/api/jobs/1/subtitles/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer abc" },
+      body: JSON.stringify({ subtitles: [{ start: 0, end: 2, text: "edited" }] }),
+    });
+    expect(edited.job.subtitles?.[0].text).toBe("edited");
   });
 });

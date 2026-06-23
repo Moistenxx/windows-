@@ -3,6 +3,7 @@ import { FormEvent, useEffect, useState } from "react";
 import {
   createAssetUpload,
   createJob,
+  configureJobVoiceover,
   contentTypeFor,
   deleteAsset,
   defaultApiBase,
@@ -23,6 +24,7 @@ import {
   saveViralSample,
   submitCreditTask,
   transitionJob,
+  updateJobSubtitles,
   updateAssetTags,
   type AiProvider,
   type Asset,
@@ -33,6 +35,7 @@ import {
   type IndustryTemplate,
   type JobsPayload,
   type MePayload,
+  type SubtitleCue,
   type ScriptDraftPayload,
   type ViralSample,
 } from "./api";
@@ -281,6 +284,48 @@ export function App() {
     }
   }
 
+  async function setJobVoiceover(jobId: number, mode: "none" | "tts" | "asr") {
+    if (auth.status !== "authenticated" || jobs.status !== "ready") return;
+    const provider = providers.status === "ready" ? providers.providers.find((item) => item.capability === mode) : undefined;
+    const source = assets.status === "ready" ? assets.assets.find((item) => ["audio", "video"].includes(item.asset_type ?? "")) : undefined;
+    if (mode !== "none" && !provider) {
+      setJobs({ ...jobs, message: `缺少 ${mode.toUpperCase()} 模型` });
+      return;
+    }
+    if (mode === "asr" && !source) {
+      setJobs({ ...jobs, message: "缺少可做 ASR 的音频/视频素材" });
+      return;
+    }
+    const voiceScript = scriptDraft.status === "ready" ? scriptDraft.draft.confirmed_script || scriptText : scriptText;
+    if (mode === "tts" && !voiceScript.trim()) {
+      setJobs({ ...jobs, message: "请先生成或填写脚本" });
+      return;
+    }
+    try {
+      const payload = await configureJobVoiceover(apiBase, auth.token, jobId, {
+        mode,
+        providerId: provider?.id,
+        script: voiceScript,
+        assetId: source?.id,
+      });
+      setJobs({ status: "ready", payload: upsertJobList(jobs.payload, payload.job), message: "配音/字幕已更新" });
+    } catch (error) {
+      setJobs({ ...jobs, message: error instanceof Error ? error.message : "Voiceover update failed" });
+    }
+  }
+
+  async function saveJobSubtitleText(job: JobsPayload["jobs"][number], value: string) {
+    if (auth.status !== "authenticated" || jobs.status !== "ready") return;
+    const lines = value.split("\n").map((line) => line.trim()).filter(Boolean);
+    const subtitles: SubtitleCue[] = lines.map((text, index) => ({
+      start: job.subtitles?.[index]?.start ?? index * 2,
+      end: job.subtitles?.[index]?.end ?? index * 2 + 2,
+      text,
+    }));
+    const payload = await updateJobSubtitles(apiBase, auth.token, job.id, subtitles);
+    setJobs({ status: "ready", payload: upsertJobList(jobs.payload, payload.job), message: "字幕已保存" });
+  }
+
   async function estimateSelectedProvider(providerId: number) {
     if (auth.status !== "authenticated" || providers.status !== "ready") return;
     setProviders({ ...providers, selectedId: providerId });
@@ -457,10 +502,21 @@ export function App() {
                       <li key={job.id}>
                         <div>
                           #{job.id} {job.title} <span>{job.status} · {job.current_step || "等待"} · 预计等待 {job.estimated_wait_seconds}s</span>
+                          <p>配音：{job.voiceover_mode || "none"} {job.audio_placeholder ? `· ${job.audio_placeholder}` : ""}</p>
+                          {job.subtitles && job.subtitles.length > 0 && (
+                            <textarea
+                              defaultValue={job.subtitles.map((cue) => cue.text).join("\n")}
+                              rows={Math.min(6, job.subtitles.length + 1)}
+                              onBlur={(event) => saveJobSubtitleText(job, event.target.value)}
+                            />
+                          )}
                         </div>
                         {job.status === "pending" && <button className="mini-action" onClick={() => moveJob(job.id, "running", "script")}>开始</button>}
                         {job.status === "running" && <button className="mini-action" onClick={() => moveJob(job.id, "succeeded")}>完成</button>}
                         {["pending", "running"].includes(job.status) && <button className="mini-action" onClick={() => moveJob(job.id, "failed")}>失败退款</button>}
+                        <button className="mini-action" onClick={() => setJobVoiceover(job.id, "none")}>无配音</button>
+                        <button className="mini-action" onClick={() => setJobVoiceover(job.id, "tts")}>AI配音</button>
+                        <button className="mini-action" onClick={() => setJobVoiceover(job.id, "asr")}>ASR字幕</button>
                       </li>
                     ))}
                   </ul>

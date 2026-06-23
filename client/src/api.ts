@@ -36,8 +36,14 @@ export type JobPayload = {
   estimated_wait_seconds: number;
   error_message?: string;
   credit_task_id?: number;
+  voiceover_mode?: string;
+  voiceover_provider_id?: number;
+  source_audio_asset_id?: number;
+  audio_placeholder?: string;
+  subtitles?: SubtitleCue[];
   created_at?: string;
 };
+export type SubtitleCue = { start: number; end: number; text: string };
 export type JobsPayload = {
   jobs: JobPayload[];
   concurrency_limits: { global: number; workspace: number };
@@ -286,6 +292,48 @@ export async function transitionJob(
       Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify(body),
+  });
+  return readJson(response);
+}
+
+export async function configureJobVoiceover(
+  apiBase: string,
+  token: string,
+  jobId: number,
+  input: { mode: string; providerId?: number; script?: string; assetId?: number; subtitles?: SubtitleCue[] },
+  fetcher: Fetcher = fetch,
+): Promise<JobMutationPayload> {
+  const response = await fetcher<JobMutationPayload>(apiUrl(apiBase, `/api/jobs/${jobId}/voiceover/`), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      mode: input.mode,
+      provider_id: input.providerId,
+      script: input.script,
+      asset_id: input.assetId,
+      subtitles: input.subtitles,
+    }),
+  });
+  return readJson(response);
+}
+
+export async function updateJobSubtitles(
+  apiBase: string,
+  token: string,
+  jobId: number,
+  subtitles: SubtitleCue[],
+  fetcher: Fetcher = fetch,
+): Promise<JobMutationPayload> {
+  const response = await fetcher<JobMutationPayload>(apiUrl(apiBase, `/api/jobs/${jobId}/subtitles/`), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ subtitles }),
   });
   return readJson(response);
 }

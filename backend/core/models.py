@@ -406,6 +406,14 @@ class Job(models.Model):
         (SUCCEEDED, "Succeeded"),
         (FAILED, "Failed"),
     ]
+    VOICEOVER_NONE = "none"
+    VOICEOVER_TTS = "tts"
+    VOICEOVER_ASR = "asr"
+    VOICEOVER_CHOICES = [
+        (VOICEOVER_NONE, "No voiceover"),
+        (VOICEOVER_TTS, "TTS voiceover"),
+        (VOICEOVER_ASR, "ASR subtitles"),
+    ]
     DEFAULT_STEPS = ["script", "subtitle", "voiceover", "clipping", "export"]
     GLOBAL_RUNNING_LIMIT = 2
     WORKSPACE_RUNNING_LIMIT = 1
@@ -419,6 +427,11 @@ class Job(models.Model):
     current_step = models.CharField(max_length=40, blank=True)
     estimated_wait_seconds = models.PositiveIntegerField(default=0)
     error_message = models.CharField(max_length=240, blank=True)
+    voiceover_mode = models.CharField(max_length=20, choices=VOICEOVER_CHOICES, default=VOICEOVER_NONE)
+    voiceover_provider = models.ForeignKey(AIProvider, on_delete=models.SET_NULL, null=True, blank=True, related_name="voiceover_jobs")
+    source_audio_asset = models.ForeignKey(Asset, on_delete=models.SET_NULL, null=True, blank=True, related_name="asr_jobs")
+    audio_placeholder = models.CharField(max_length=320, blank=True)
+    subtitles = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -486,6 +499,11 @@ class Job(models.Model):
             "estimated_wait_seconds": self.estimated_wait_seconds,
             "error_message": self.error_message,
             "credit_task_id": self.credit_task_id,
+            "voiceover_mode": self.voiceover_mode,
+            "voiceover_provider_id": self.voiceover_provider_id,
+            "source_audio_asset_id": self.source_audio_asset_id,
+            "audio_placeholder": self.audio_placeholder,
+            "subtitles": self.subtitles,
             "created_at": self.created_at.isoformat(),
         }
 
