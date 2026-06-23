@@ -11,6 +11,7 @@ from .models import (
     CreditTask,
     IndustryTemplate,
     InvitationCode,
+    ScriptDraft,
     ViralSample,
     Workspace,
     WorkspaceMembership,
@@ -70,6 +71,14 @@ class ViralSampleAdmin(admin.ModelAdmin):
     list_display = ("title", "scope", "workspace", "customer", "source_url", "created_at")
     list_filter = ("scope",)
     search_fields = ("title", "copy", "source_url", "tags")
+
+
+@admin.register(ScriptDraft)
+class ScriptDraftAdmin(admin.ModelAdmin):
+    list_display = ("workspace", "customer", "template", "provider", "duration_seconds", "confirmed_at", "created_at")
+    list_filter = ("duration_seconds", "confirmed_at")
+    search_fields = ("workspace__name", "customer__name", "confirmed_script")
+    readonly_fields = ("created_at",)
 
 
 @admin.register(Asset)

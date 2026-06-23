@@ -13,6 +13,8 @@ import {
   fetchHealth,
   fetchScriptAssets,
   fetchMe,
+  confirmScript,
+  generateScripts,
   login,
   registerWithInvite,
   saveCustomer,
@@ -27,6 +29,7 @@ import {
   type HealthPayload,
   type IndustryTemplate,
   type MePayload,
+  type ScriptDraftPayload,
   type ViralSample,
 } from "./api";
 import "./styles.css";
@@ -69,6 +72,12 @@ type ScriptAssetState =
   | { status: "ready"; templates: IndustryTemplate[]; samples: ViralSample[]; selectedTemplateId: number | null; message?: string }
   | { status: "error"; message: string };
 
+type ScriptDraftState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "ready"; draft: ScriptDraftPayload; message?: string }
+  | { status: "error"; message: string };
+
 type AuthState =
   | { status: "anonymous" }
   | { status: "loading" }
@@ -96,8 +105,12 @@ export function App() {
   const [customers, setCustomers] = useState<CustomerState>({ status: "idle" });
   const [assets, setAssets] = useState<AssetState>({ status: "idle" });
   const [scriptAssets, setScriptAssets] = useState<ScriptAssetState>({ status: "idle" });
+  const [scriptDraft, setScriptDraft] = useState<ScriptDraftState>({ status: "idle" });
   const [customerForm, setCustomerForm] = useState<CustomerProfile>({ name: "", industry: "", products: "", selling_points: "" });
   const [sampleForm, setSampleForm] = useState({ source_url: "", copy: "", tags: "" });
+  const [durationSeconds, setDurationSeconds] = useState(30);
+  const [selectedSampleIds, setSelectedSampleIds] = useState<number[]>([]);
+  const [scriptText, setScriptText] = useState("");
   const [taskMessage, setTaskMessage] = useState("");
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("owner@example.com");
@@ -142,6 +155,9 @@ export function App() {
       setCustomers({ status: "idle" });
       setAssets({ status: "idle" });
       setScriptAssets({ status: "idle" });
+      setScriptDraft({ status: "idle" });
+      setSelectedSampleIds([]);
+      setScriptText("");
       return;
     }
     setCredits({ status: "loading" });
@@ -270,13 +286,81 @@ export function App() {
     });
   }
 
+  function selectTemplate(templateId: number) {
+    if (scriptAssets.status !== "ready") return;
+    setScriptAssets({ ...scriptAssets, selectedTemplateId: templateId });
+  }
+
+  function toggleSample(sampleId: number | undefined, checked: boolean) {
+    if (!sampleId) return;
+    setSelectedSampleIds((ids) => checked ? Array.from(new Set([...ids, sampleId])) : ids.filter((id) => id !== sampleId));
+  }
+
+  async function submitSample(event: FormEvent) {
+    event.preventDefault();
+    if (auth.status !== "authenticated" || scriptAssets.status !== "ready") return;
+    const copy = sampleForm.copy.trim();
+    if (!copy) {
+      setScriptAssets({ ...scriptAssets, message: "请先粘贴爆款文案" });
+      return;
+    }
+    const saved = await saveViralSample(apiBase, auth.token, {
+      customer_id: customers.status === "ready" ? customers.selectedId ?? undefined : undefined,
+      source_url: sampleForm.source_url.trim(),
+      copy,
+      tags: sampleForm.tags.split(",").map((tag) => tag.trim()).filter(Boolean),
+    });
+    setScriptAssets({ ...scriptAssets, samples: [saved, ...scriptAssets.samples], message: "爆款样本已保存" });
+    if (saved.id) setSelectedSampleIds((ids) => Array.from(new Set([...ids, saved.id as number])));
+    setSampleForm({ source_url: "", copy: "", tags: "" });
+  }
+
+  async function generateScriptCandidates() {
+    if (auth.status !== "authenticated") return;
+    const customerId = customers.status === "ready" ? customers.selectedId : null;
+    const templateId = scriptAssets.status === "ready" ? scriptAssets.selectedTemplateId : null;
+    const llmProviders = providers.status === "ready" ? providers.providers.filter((provider) => provider.capability === "llm") : [];
+    const provider = providers.status === "ready"
+      ? llmProviders.find((item) => item.id === providers.selectedId) ?? llmProviders[0]
+      : undefined;
+    if (!customerId || !templateId || !provider) {
+      setScriptDraft({ status: "error", message: "请先选择客户、行业模板和 LLM 模型" });
+      return;
+    }
+    setScriptDraft({ status: "loading" });
+    try {
+      const draft = await generateScripts(apiBase, auth.token, {
+        customerId,
+        templateId,
+        providerId: provider.id,
+        durationSeconds,
+        sampleIds: selectedSampleIds,
+      });
+      setScriptText(draft.candidates[0] ?? "");
+      setScriptDraft({ status: "ready", draft, message: "候选脚本已生成，确认前不会冻结渲染积分" });
+    } catch (error) {
+      setScriptDraft({ status: "error", message: error instanceof Error ? error.message : "Script generation failed" });
+    }
+  }
+
+  async function confirmSelectedScript() {
+    if (auth.status !== "authenticated" || scriptDraft.status !== "ready") return;
+    const script = scriptText.trim();
+    if (!script) {
+      setScriptDraft({ status: "error", message: "确认前请保留脚本文案" });
+      return;
+    }
+    const draft = await confirmScript(apiBase, auth.token, scriptDraft.draft.id, script);
+    setScriptDraft({ status: "ready", draft, message: draft.render_ready ? "已确认，可进入后续渲染" : undefined });
+  }
+
   return (
     <main className="app-shell">
       <section className="hero-card">
         <p className="eyebrow">Windows client shell</p>
         <h1>AI 短视频批量生产工作台</h1>
         <p className="subtitle">
-          Issue #3 烟囱链路：workspace 积分、人工充值、冻结、扣除、退回。
+          从客户档案、爆款样本到 AI 脚本确认；确认后再进入后续渲染扣费。
         </p>
         <div className="status-card" data-state={health.status}>
           <span className="status-dot" />
@@ -336,6 +420,75 @@ export function App() {
                   <button className="mini-action">保存档案</button>
                 </form>
                 {customers.status === "ready" && customers.selectedId && <p>项目创建将使用当前选中的客户档案。</p>}
+              </div>
+              <div className="credit-card">
+                <b>AI 爆款脚本</b>
+                <p>选择客户、抖音行业模板、时长、参考样本和 LLM；生成候选不会冻结视频渲染积分。</p>
+                {scriptAssets.status === "loading" && <p>脚本模板加载中...</p>}
+                {scriptAssets.status === "error" && <p>{scriptAssets.message}</p>}
+                {scriptAssets.status === "ready" && (
+                  <>
+                    <select value={scriptAssets.selectedTemplateId ?? ""} onChange={(event) => selectTemplate(Number(event.target.value))}>
+                      {scriptAssets.templates.map((template) => (
+                        <option key={template.id} value={template.id}>{template.industry || "通用"} · {template.name}</option>
+                      ))}
+                    </select>
+                    <select value={durationSeconds} onChange={(event) => setDurationSeconds(Number(event.target.value))}>
+                      <option value={15}>15秒</option>
+                      <option value={30}>30秒</option>
+                      <option value={60}>60秒</option>
+                    </select>
+                    {providers.status === "ready" && (
+                      <select
+                        value={providers.providers.find((provider) => provider.id === providers.selectedId && provider.capability === "llm")?.id ?? providers.providers.find((provider) => provider.capability === "llm")?.id ?? ""}
+                        onChange={(event) => setProviders({ ...providers, selectedId: Number(event.target.value) })}
+                      >
+                        {providers.providers.filter((provider) => provider.capability === "llm").map((provider) => (
+                          <option key={provider.id} value={provider.id}>{provider.name} · {provider.model_name}</option>
+                        ))}
+                      </select>
+                    )}
+                    <form className="mini-form" onSubmit={submitSample}>
+                      <input placeholder="抖音链接（可选）" value={sampleForm.source_url} onChange={(event) => setSampleForm({ ...sampleForm, source_url: event.target.value })} />
+                      <input placeholder="粘贴爆款文案" value={sampleForm.copy} onChange={(event) => setSampleForm({ ...sampleForm, copy: event.target.value })} />
+                      <input placeholder="标签：hook, price" value={sampleForm.tags} onChange={(event) => setSampleForm({ ...sampleForm, tags: event.target.value })} />
+                      <button className="mini-action">保存参考样本</button>
+                    </form>
+                    {scriptAssets.message && <p>{scriptAssets.message}</p>}
+                    {scriptAssets.samples.length > 0 && (
+                      <ul className="workspace-list">
+                        {scriptAssets.samples.map((sample) => (
+                          <li key={sample.id ?? sample.copy}>
+                            <label>
+                              <input
+                                type="checkbox"
+                                checked={Boolean(sample.id && selectedSampleIds.includes(sample.id))}
+                                onChange={(event) => toggleSample(sample.id, event.target.checked)}
+                              />
+                              {sample.title || sample.copy.slice(0, 40)}
+                            </label>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    <button className="mini-action" type="button" onClick={generateScriptCandidates}>生成 3 条候选脚本</button>
+                  </>
+                )}
+                {scriptDraft.status === "loading" && <p>AI 正在生成候选...</p>}
+                {scriptDraft.status === "error" && <p>{scriptDraft.message}</p>}
+                {scriptDraft.status === "ready" && (
+                  <>
+                    <p>{scriptDraft.message}</p>
+                    <div className="mode-row">
+                      {scriptDraft.draft.candidates.map((candidate, index) => (
+                        <button type="button" key={candidate} onClick={() => setScriptText(candidate)}>候选 {index + 1}</button>
+                      ))}
+                    </div>
+                    <textarea value={scriptText} rows={8} onChange={(event) => setScriptText(event.target.value)} />
+                    <button className="mini-action" type="button" onClick={confirmSelectedScript}>确认脚本</button>
+                    {scriptDraft.draft.render_ready && <p>已确认，可进入后续渲染。</p>}
+                  </>
+                )}
               </div>
               <div className="credit-card">
                 <b>团队素材库</b>

@@ -12,10 +12,12 @@ import {
   fetchHealth,
   fetchMe,
   fetchScriptAssets,
+  generateScripts,
   login,
   registerWithInvite,
   saveCustomer,
   saveViralSample,
+  confirmScript,
   submitCreditTask,
   updateAssetTags,
 } from "./api";
@@ -273,5 +275,48 @@ describe("script asset API helpers", () => {
       headers: { "Content-Type": "application/json", Authorization: "Bearer abc" },
       body: JSON.stringify({ customer_id: 1, copy: "viral" }),
     });
+  });
+});
+
+describe("script generation API helpers", () => {
+  it("generates script candidates and confirms the edited final script", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ id: 9, candidates: ["draft"], confirmed_script: "", render_ready: false }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ id: 9, candidates: ["draft"], confirmed_script: "edited", render_ready: true }),
+      });
+
+    const draft = await generateScripts("http://127.0.0.1:8000", "abc", {
+      customerId: 1,
+      templateId: 2,
+      providerId: 3,
+      durationSeconds: 30,
+      sampleIds: [4],
+    }, fetchMock);
+    const confirmed = await confirmScript("http://127.0.0.1:8000", "abc", 9, "edited", fetchMock);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "http://127.0.0.1:8000/api/scripts/generate/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer abc" },
+      body: JSON.stringify({
+        customer_id: 1,
+        template_id: 2,
+        provider_id: 3,
+        duration_seconds: 30,
+        sample_ids: [4],
+      }),
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "http://127.0.0.1:8000/api/scripts/9/confirm/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer abc" },
+      body: JSON.stringify({ script: "edited" }),
+    });
+    expect(draft.render_ready).toBe(false);
+    expect(confirmed.render_ready).toBe(true);
   });
 });

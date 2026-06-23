@@ -233,6 +233,40 @@ class ViralSample(models.Model):
         return self.title or self.copy[:40]
 
 
+class ScriptDraft(models.Model):
+    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name="script_drafts")
+    customer = models.ForeignKey(CustomerProfile, on_delete=models.PROTECT, related_name="script_drafts")
+    template = models.ForeignKey(IndustryTemplate, on_delete=models.PROTECT, related_name="script_drafts")
+    provider = models.ForeignKey(AIProvider, on_delete=models.PROTECT, related_name="script_drafts")
+    duration_seconds = models.PositiveIntegerField()
+    sample_ids = models.JSONField(default=list, blank=True)
+    candidates = models.JSONField(default=list, blank=True)
+    confirmed_script = models.TextField(blank=True)
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    @property
+    def render_ready(self):
+        return bool(self.confirmed_at and self.confirmed_script.strip())
+
+    def public_payload(self):
+        return {
+            "id": self.id,
+            "workspace_id": self.workspace_id,
+            "customer_id": self.customer_id,
+            "template_id": self.template_id,
+            "provider_id": self.provider_id,
+            "duration_seconds": self.duration_seconds,
+            "sample_ids": self.sample_ids,
+            "candidates": self.candidates,
+            "confirmed_script": self.confirmed_script,
+            "render_ready": self.render_ready,
+        }
+
+    def __str__(self):
+        return f"{self.workspace.name} script draft #{self.id}"
+
+
 class Asset(models.Model):
     VIDEO = "video"
     IMAGE = "image"

@@ -20,6 +20,7 @@ from .models import (
     InsufficientCredits,
     IndustryTemplate,
     InvitationCode,
+    ScriptDraft,
     ViralSample,
     Workspace,
     WorkspaceMembership,
@@ -442,6 +443,88 @@ def asset_tags(request, asset_id):
         return error(str(exc))
     asset.save(update_fields=["tags"])
     return JsonResponse(asset.public_payload())
+
+
+SCRIPT_DURATIONS = {15, 30, 60}
+
+def clean_script_sample_ids(value):
+    if value in (None, ""):
+        return []
+    if not isinstance(value, list):
+        raise ValueError("sample_ids must be a list")
+    sample_ids = []
+    for item in value:
+        sample_id = int(item)
+        if sample_id not in sample_ids:
+            sample_ids.append(sample_id)
+    return sample_ids
+
+def fake_script_candidates(customer, template, provider, duration_seconds, samples):
+    hooks = " / ".join(sample.copy[:40] for sample in samples) or "首屏钩子"
+    brief = (
+        f"{customer.name}｜{customer.industry or template.industry}｜{customer.products or '产品'}｜"
+        f"{customer.selling_points or '核心卖点'}｜{template.prompt or '抖音口播'}｜参考：{hooks}"
+    )
+    return [
+        provider.fake_call(f"抖音{duration_seconds}秒爆款脚本 方案{i}: {brief}｜钩子-痛点-卖点-行动")
+        for i in range(1, 4)
+    ]
+
+@csrf_exempt
+def script_generate(request):
+    if request.method != "POST":
+        return error("POST required", status=405)
+    user, auth_error = require_user(request)
+    if auth_error:
+        return auth_error
+    workspace = first_membership(user).workspace
+    data = read_json(request)
+    try:
+        duration_seconds = int(data.get("duration_seconds"))
+        if duration_seconds not in SCRIPT_DURATIONS:
+            raise ValueError
+        customer = CustomerProfile.objects.get(id=int(data.get("customer_id")), workspace=workspace)
+        template = IndustryTemplate.objects.get(id=int(data.get("template_id")), enabled=True)
+        provider = AIProvider.objects.get(id=int(data.get("provider_id")), enabled=True, capability=AIProvider.LLM)
+        sample_ids = clean_script_sample_ids(data.get("sample_ids"))
+        sample_rows = ViralSample.objects.filter(id__in=sample_ids, scope=ViralSample.SYSTEM) | ViralSample.objects.filter(id__in=sample_ids, workspace=workspace)
+        samples_by_id = {sample.id: sample for sample in sample_rows}
+        if len(samples_by_id) != len(sample_ids):
+            raise ValueError
+        samples = [samples_by_id[sample_id] for sample_id in sample_ids]
+    except (CustomerProfile.DoesNotExist, IndustryTemplate.DoesNotExist, AIProvider.DoesNotExist, TypeError, ValueError):
+        return error("Valid customer_id, template_id, provider_id, duration_seconds and sample_ids required")
+
+    draft = ScriptDraft.objects.create(
+        workspace=workspace,
+        customer=customer,
+        template=template,
+        provider=provider,
+        duration_seconds=duration_seconds,
+        sample_ids=sample_ids,
+        candidates=fake_script_candidates(customer, template, provider, duration_seconds, samples),
+    )
+    return JsonResponse(draft.public_payload(), status=201)
+
+@csrf_exempt
+def script_confirm(request, script_id):
+    if request.method != "POST":
+        return error("POST required", status=405)
+    user, auth_error = require_user(request)
+    if auth_error:
+        return auth_error
+    workspace = first_membership(user).workspace
+    try:
+        draft = ScriptDraft.objects.get(id=script_id, workspace=workspace)
+    except ScriptDraft.DoesNotExist:
+        return error("Script draft not found", status=404)
+    script = str(read_json(request).get("script") or "").strip()
+    if not script:
+        return error("Script required")
+    draft.confirmed_script = script
+    draft.confirmed_at = timezone.now()
+    draft.save(update_fields=["confirmed_script", "confirmed_at"])
+    return JsonResponse(draft.public_payload())
 
 
 def script_assets(request):

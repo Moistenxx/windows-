@@ -19,6 +19,8 @@ urlpatterns = [
     path("api/assets/", views.assets, name="assets"),
     path("api/assets/<int:asset_id>/delete/", views.asset_delete, name="asset_delete"),
     path("api/assets/<int:asset_id>/tags/", views.asset_tags, name="asset_tags"),
+    path("api/scripts/generate/", views.script_generate, name="script_generate"),
+    path("api/scripts/<int:script_id>/confirm/", views.script_confirm, name="script_confirm"),
     path("api/script-assets/", views.script_assets, name="script_assets"),
     path("api/viral-samples/", views.viral_samples, name="viral_samples"),
 ]

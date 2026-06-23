@@ -8,6 +8,7 @@ from core.models import (
     AuthToken,
     CustomerProfile,
     IndustryTemplate,
+    ScriptDraft,
     ViralSample,
     CreditAccount,
     CreditLedgerEntry,
@@ -60,6 +61,7 @@ class AdminEntryTests(TestCase):
         self.assertTrue(admin.site.is_registered(Asset))
         self.assertTrue(admin.site.is_registered(IndustryTemplate))
         self.assertTrue(admin.site.is_registered(ViralSample))
+        self.assertTrue(admin.site.is_registered(ScriptDraft))
 
 
 class AuthApiTests(TestCase):
@@ -592,3 +594,77 @@ class TemplateAndViralSampleTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["samples"], [])
+
+
+class ScriptGenerationTests(TestCase):
+    def test_fake_llm_generates_candidates_without_freezing_credits_and_user_confirms_one(self):
+        user, workspace = make_user_workspace()
+        customer = CustomerProfile.objects.create(workspace=workspace, name="Acme", industry="jewelry", products="gold", selling_points="certified")
+        template = IndustryTemplate.objects.create(name="Jewelry", industry="jewelry", prompt="premium tone", enabled=True)
+        provider = AIProvider.objects.create(capability=AIProvider.LLM, name="Fake LLM", model_name="fake-llm", enabled=True)
+        sample = ViralSample.objects.create(scope=ViralSample.WORKSPACE, workspace=workspace, customer=customer, copy="3-second hook")
+        token = AuthToken.issue_for(user)
+
+        response = self.client.post(
+            "/api/scripts/generate/",
+            data={
+                "customer_id": customer.id,
+                "template_id": template.id,
+                "provider_id": provider.id,
+                "duration_seconds": 30,
+                "sample_ids": [sample.id],
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        payload = response.json()
+        self.assertEqual(len(payload["candidates"]), 3)
+        self.assertFalse(payload["render_ready"])
+        self.assertIn("Acme", payload["candidates"][0])
+        self.assertEqual(CreditTask.objects.filter(workspace=workspace).count(), 0)
+
+        response = self.client.post(
+            f"/api/scripts/{payload['id']}/confirm/",
+            data={"script": "edited final script"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["render_ready"])
+        self.assertEqual(response.json()["confirmed_script"], "edited final script")
+
+    def test_script_generation_validates_workspace_owned_inputs_and_duration(self):
+        user, workspace = make_user_workspace()
+        customer = CustomerProfile.objects.create(workspace=workspace, name="Acme")
+        template = IndustryTemplate.objects.create(name="Jewelry", industry="jewelry", enabled=True)
+        provider = AIProvider.objects.create(capability=AIProvider.LLM, name="Fake LLM", model_name="fake-llm", enabled=True)
+        _, other_workspace = make_user_workspace("script-other@example.com")
+        other_sample = ViralSample.objects.create(scope=ViralSample.WORKSPACE, workspace=other_workspace, copy="hidden")
+        token = AuthToken.issue_for(user)
+
+        response = self.client.post(
+            "/api/scripts/generate/",
+            data={"duration_seconds": 45},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+        response = self.client.post(
+            "/api/scripts/generate/",
+            data={
+                "customer_id": customer.id,
+                "template_id": template.id,
+                "provider_id": provider.id,
+                "duration_seconds": 30,
+                "sample_ids": [other_sample.id],
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+
+        self.assertEqual(response.status_code, 400)

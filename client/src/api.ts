@@ -87,6 +87,25 @@ export type ViralSample = {
   rewrite?: string;
 };
 export type ScriptAssetsPayload = { templates: IndustryTemplate[]; samples: ViralSample[] };
+export type ScriptDraftPayload = {
+  id: number;
+  workspace_id?: number;
+  customer_id: number;
+  template_id: number;
+  provider_id: number;
+  duration_seconds: number;
+  sample_ids: number[];
+  candidates: string[];
+  confirmed_script: string;
+  render_ready: boolean;
+};
+export type GenerateScriptInput = {
+  customerId: number;
+  templateId: number;
+  providerId: number;
+  durationSeconds: number;
+  sampleIds: number[];
+};
 
 export type AuthPayload = {
   token: string;
@@ -362,6 +381,47 @@ export async function saveViralSample(
       Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify(input),
+  });
+  return readJson(response);
+}
+
+export async function generateScripts(
+  apiBase: string,
+  token: string,
+  input: GenerateScriptInput,
+  fetcher: Fetcher = fetch,
+): Promise<ScriptDraftPayload> {
+  const response = await fetcher<ScriptDraftPayload>(apiUrl(apiBase, "/api/scripts/generate/"), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      customer_id: input.customerId,
+      template_id: input.templateId,
+      provider_id: input.providerId,
+      duration_seconds: input.durationSeconds,
+      sample_ids: input.sampleIds,
+    }),
+  });
+  return readJson(response);
+}
+
+export async function confirmScript(
+  apiBase: string,
+  token: string,
+  scriptId: number,
+  script: string,
+  fetcher: Fetcher = fetch,
+): Promise<ScriptDraftPayload> {
+  const response = await fetcher<ScriptDraftPayload>(apiUrl(apiBase, `/api/scripts/${scriptId}/confirm/`), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ script }),
   });
   return readJson(response);
 }
