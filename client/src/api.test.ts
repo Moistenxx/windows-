@@ -16,6 +16,7 @@ import {
   generateScripts,
   login,
   registerWithInvite,
+  renderJob,
   saveCustomer,
   saveViralSample,
   confirmScript,
@@ -377,5 +378,27 @@ describe("voiceover and subtitle API helpers", () => {
       body: JSON.stringify({ subtitles: [{ start: 0, end: 2, text: "edited" }] }),
     });
     expect(edited.job.subtitles?.[0].text).toBe("edited");
+  });
+});
+
+describe("render API helpers", () => {
+  it("submits a render job and receives an output asset", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        job: { id: 1, status: "succeeded", render: { width: 1080, height: 1920 } },
+        output_asset: { id: 2, asset_type: "output", preview_url: "/api/assets/2/preview/" },
+        credits: { balance: 380, frozen: 0 },
+      }),
+    });
+
+    const result = await renderJob("http://127.0.0.1:8000", "abc", 1, [7, 8], fetchMock);
+
+    expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:8000/api/jobs/1/render/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer abc" },
+      body: JSON.stringify({ asset_ids: [7, 8] }),
+    });
+    expect(result.output_asset.preview_url).toBe("/api/assets/2/preview/");
   });
 });

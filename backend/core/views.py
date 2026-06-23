@@ -1,13 +1,16 @@
 import json
 import re
-from pathlib import PurePath
+import subprocess
+import uuid
+from pathlib import Path, PurePath
 
+from django.conf import settings
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError
 from django.core.validators import URLValidator, validate_email
 from django.db import transaction
-from django.http import JsonResponse
+from django.http import FileResponse, JsonResponse
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 
@@ -367,6 +370,116 @@ def job_subtitles(request, job_id):
         return error(str(exc))
     job.save(update_fields=["subtitles", "updated_at"])
     return JsonResponse({"job": job.public_payload(), "credits": credit_payload(workspace)})
+
+
+RENDER_TAG_PRIORITY = ["product", "person", "detail", "process", "comparison", "price", "certificate", "storefront", "environment"]
+
+def local_asset_path(object_key):
+    return Path(settings.BASE_DIR) / "local_media" / object_key
+
+def preview_user(request):
+    return bearer_user(request) or AuthToken.user_for((request.GET.get("token") or "").strip())
+
+def ordered_render_assets(workspace, raw_ids):
+    if not isinstance(raw_ids, list):
+        raise ValueError("asset_ids must be a list")
+    asset_ids = [int(asset_id) for asset_id in raw_ids]
+    assets = list(Asset.objects.filter(id__in=asset_ids, workspace=workspace, deleted_at__isnull=True).exclude(asset_type=Asset.OUTPUT))
+    if len(assets) != len(set(asset_ids)) or not assets:
+        raise ValueError("Valid asset_ids required")
+    def rank(asset):
+        ranks = [RENDER_TAG_PRIORITY.index(tag) for tag in asset.tags if tag in RENDER_TAG_PRIORITY]
+        return (min(ranks) if ranks else len(RENDER_TAG_PRIORITY), asset.id)
+    return sorted(assets, key=rank)
+
+def run_ffmpeg_render(job, output_path):
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    text = " ".join(str(cue.get("text", "")) for cue in job.subtitles[:2]) or job.title
+    safe_text = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff ]+", " ", text).strip()[:120] or "AI video"
+    command = [
+        "ffmpeg",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=black:s=1080x1920:d=1",
+        "-vf",
+        f"drawtext=text='{safe_text}':fontcolor=white:fontsize=60:x=(w-text_w)/2:y=h-240",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        str(output_path),
+    ]
+    result = subprocess.run(command, capture_output=True)
+    if result.returncode != 0 or not output_path.exists():
+        raise RuntimeError(result.stderr.decode("utf-8", errors="ignore")[-500:] or "ffmpeg failed")
+    return output_path
+
+@csrf_exempt
+def job_render(request, job_id):
+    if request.method != "POST":
+        return error("POST required", status=405)
+    user, auth_error = require_user(request)
+    if auth_error:
+        return auth_error
+    workspace = first_membership(user).workspace
+    try:
+        job = Job.objects.get(id=job_id, workspace=workspace)
+        assets = ordered_render_assets(workspace, read_json(request).get("asset_ids"))
+    except Job.DoesNotExist:
+        return error("Job not found", status=404)
+    except (TypeError, ValueError) as exc:
+        return error(str(exc))
+    try:
+        if job.status == Job.PENDING:
+            job.start("export")
+        elif job.status != Job.RUNNING:
+            return error("Only pending or running jobs can render")
+    except ConcurrencyLimitReached:
+        return JsonResponse({"error": "Concurrency limit reached", "job": job.public_payload(), "credits": credit_payload(workspace)}, status=409)
+    object_key = f"workspaces/{workspace.id}/outputs/{uuid.uuid4().hex}/job-{job.id}.mp4"
+    output_path = local_asset_path(object_key)
+    try:
+        run_ffmpeg_render(job, output_path)
+        output = Asset.objects.create(
+            workspace=workspace,
+            uploaded_by=user,
+            filename=f"job-{job.id}.mp4",
+            content_type="video/mp4",
+            asset_type=Asset.OUTPUT,
+            object_key=object_key,
+            tags=["output"],
+        )
+        job.output_asset = output
+        job.render = {
+            "width": 1080,
+            "height": 1920,
+            "subtitles_burned": True,
+            "source_asset_ids": [asset.id for asset in assets],
+        }
+        job.save(update_fields=["output_asset", "render", "updated_at"])
+        job.succeed()
+    except Exception as exc:
+        job.fail(str(exc))
+        return JsonResponse({"error": "Render failed", "job": job.public_payload(), "credits": credit_payload(workspace)}, status=500)
+    return JsonResponse({"job": job.public_payload(), "output_asset": output.public_payload(), "credits": credit_payload(workspace)})
+
+def asset_preview(request, asset_id):
+    user = preview_user(request)
+    if user is None:
+        return error("Authentication required", status=401)
+    membership = first_membership(user)
+    if membership is None:
+        return error("Workspace required", status=409)
+    try:
+        asset = Asset.objects.get(id=asset_id, workspace=membership.workspace, deleted_at__isnull=True)
+    except Asset.DoesNotExist:
+        return error("Asset not found", status=404)
+    path = local_asset_path(asset.object_key)
+    if not path.exists():
+        return error("Preview file not found", status=404)
+    return FileResponse(path.open("rb"), content_type=asset.content_type)
 
 
 def ai_providers(request):

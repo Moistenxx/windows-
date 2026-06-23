@@ -20,6 +20,7 @@ import {
   generateScripts,
   login,
   registerWithInvite,
+  renderJob,
   saveCustomer,
   saveViralSample,
   submitCreditTask,
@@ -326,6 +327,29 @@ export function App() {
     setJobs({ status: "ready", payload: upsertJobList(jobs.payload, payload.job), message: "字幕已保存" });
   }
 
+  async function renderSelectedJob(jobId: number) {
+    if (auth.status !== "authenticated" || jobs.status !== "ready" || assets.status !== "ready") return;
+    const sourceIds = assets.assets.filter((asset) => asset.asset_type !== "output").map((asset) => asset.id);
+    if (sourceIds.length === 0) {
+      setJobs({ ...jobs, message: "请先上传素材再渲染" });
+      return;
+    }
+    try {
+      const payload = await renderJob(apiBase, auth.token, jobId, sourceIds);
+      setCredits({ status: "ready", payload: payload.credits });
+      setJobs({ status: "ready", payload: upsertJobList(jobs.payload, payload.job), message: "渲染完成，可预览下载" });
+      setAssets({ status: "ready", assets: [payload.output_asset, ...assets.assets.filter((asset) => asset.id !== payload.output_asset.id)] });
+    } catch (error) {
+      const payload = await fetchJobs(apiBase, auth.token);
+      setJobs({ status: "ready", payload, message: error instanceof Error ? error.message : "Render failed" });
+      fetchCredits(apiBase, auth.token).then((payload) => setCredits({ status: "ready", payload }));
+    }
+  }
+
+  function previewSrc(asset: Asset) {
+    return asset.preview_url ? `${apiBase.replace(/\/$/, "")}${asset.preview_url}?token=${encodeURIComponent(auth.status === "authenticated" ? auth.token : "")}` : "";
+  }
+
   async function estimateSelectedProvider(providerId: number) {
     if (auth.status !== "authenticated" || providers.status !== "ready") return;
     setProviders({ ...providers, selectedId: providerId });
@@ -510,10 +534,21 @@ export function App() {
                               onBlur={(event) => saveJobSubtitleText(job, event.target.value)}
                             />
                           )}
+                          {assets.status === "ready" && (() => {
+                            const output = assets.assets.find((asset) => asset.id === job.output_asset_id);
+                            const src = output ? previewSrc(output) : "";
+                            return src ? (
+                              <div>
+                                <video controls src={src} width={180} />
+                                <a href={src} download={output?.filename}>下载 MP4</a>
+                              </div>
+                            ) : null;
+                          })()}
                         </div>
                         {job.status === "pending" && <button className="mini-action" onClick={() => moveJob(job.id, "running", "script")}>开始</button>}
                         {job.status === "running" && <button className="mini-action" onClick={() => moveJob(job.id, "succeeded")}>完成</button>}
                         {["pending", "running"].includes(job.status) && <button className="mini-action" onClick={() => moveJob(job.id, "failed")}>失败退款</button>}
+                        {["pending", "running"].includes(job.status) && <button className="mini-action" onClick={() => renderSelectedJob(job.id)}>渲染预览</button>}
                         <button className="mini-action" onClick={() => setJobVoiceover(job.id, "none")}>无配音</button>
                         <button className="mini-action" onClick={() => setJobVoiceover(job.id, "tts")}>AI配音</button>
                         <button className="mini-action" onClick={() => setJobVoiceover(job.id, "asr")}>ASR字幕</button>

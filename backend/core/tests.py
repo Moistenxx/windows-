@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from django.contrib import admin
 from django.contrib.auth.models import User
 from django.test import TestCase
@@ -793,3 +795,53 @@ class VoiceoverSubtitleTests(TestCase):
         self.assertEqual(payload["voiceover_mode"], "asr")
         self.assertEqual(payload["source_audio_asset_id"], asset.id)
         self.assertIn("source.wav", payload["subtitles"][0]["text"])
+
+
+class SingleVideoRenderTests(TestCase):
+    def test_render_job_creates_9_16_downloadable_preview_asset_and_settles_credits(self):
+        user, workspace = make_user_workspace()
+        CreditRecharge.objects.create(workspace=workspace, amount=500)
+        first = Asset.objects.create(workspace=workspace, uploaded_by=user, filename="detail.mp4", content_type="video/mp4", asset_type=Asset.VIDEO, object_key="detail", tags=["detail"])
+        second = Asset.objects.create(workspace=workspace, uploaded_by=user, filename="product.mp4", content_type="video/mp4", asset_type=Asset.VIDEO, object_key="product", tags=["product"])
+        token = AuthToken.issue_for(user)
+        job = self.client.post("/api/jobs/", data={"title": "render job", "estimated_credits": 120}, content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {token}").json()["job"]
+        self.client.post(f"/api/jobs/{job['id']}/subtitles/", data={"subtitles": [{"start": 0, "end": 1, "text": "buy now"}]}, content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {token}")
+
+        response = self.client.post(
+            f"/api/jobs/{job['id']}/render/",
+            data={"asset_ids": [first.id, second.id]},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["job"]["status"], "succeeded")
+        self.assertEqual(payload["job"]["render"]["width"], 1080)
+        self.assertEqual(payload["job"]["render"]["height"], 1920)
+        self.assertEqual(payload["job"]["render"]["source_asset_ids"], [second.id, first.id])
+        self.assertEqual(payload["output_asset"]["asset_type"], "output")
+        self.assertEqual(payload["credits"], {"workspace_id": workspace.id, "balance": 380, "frozen": 0})
+
+        response = self.client.get(payload["output_asset"]["preview_url"], HTTP_AUTHORIZATION=f"Bearer {token}")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "video/mp4")
+
+    def test_render_failure_marks_job_failed_and_refunds_credits(self):
+        user, workspace = make_user_workspace()
+        CreditRecharge.objects.create(workspace=workspace, amount=200)
+        asset = Asset.objects.create(workspace=workspace, uploaded_by=user, filename="clip.mp4", content_type="video/mp4", asset_type=Asset.VIDEO, object_key="clip", tags=["product"])
+        token = AuthToken.issue_for(user)
+        job = self.client.post("/api/jobs/", data={"title": "bad render", "estimated_credits": 120}, content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {token}").json()["job"]
+
+        with patch("core.views.run_ffmpeg_render", side_effect=RuntimeError("boom")):
+            response = self.client.post(
+                f"/api/jobs/{job['id']}/render/",
+                data={"asset_ids": [asset.id]},
+                content_type="application/json",
+                HTTP_AUTHORIZATION=f"Bearer {token}",
+            )
+
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.json()["job"]["status"], "failed")
+        self.assertEqual(response.json()["credits"], {"workspace_id": workspace.id, "balance": 200, "frozen": 0})

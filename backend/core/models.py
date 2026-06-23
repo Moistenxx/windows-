@@ -315,6 +315,7 @@ class Asset(models.Model):
             "tags": self.tags,
             "expires_at": self.expires_at.isoformat(),
             "deleted": self.deleted_at is not None,
+            "preview_url": f"/api/assets/{self.id}/preview/" if self.asset_type in {self.VIDEO, self.OUTPUT} else "",
         }
 
     def __str__(self):
@@ -430,8 +431,10 @@ class Job(models.Model):
     voiceover_mode = models.CharField(max_length=20, choices=VOICEOVER_CHOICES, default=VOICEOVER_NONE)
     voiceover_provider = models.ForeignKey(AIProvider, on_delete=models.SET_NULL, null=True, blank=True, related_name="voiceover_jobs")
     source_audio_asset = models.ForeignKey(Asset, on_delete=models.SET_NULL, null=True, blank=True, related_name="asr_jobs")
+    output_asset = models.ForeignKey(Asset, on_delete=models.SET_NULL, null=True, blank=True, related_name="output_jobs")
     audio_placeholder = models.CharField(max_length=320, blank=True)
     subtitles = models.JSONField(default=list, blank=True)
+    render = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -504,6 +507,8 @@ class Job(models.Model):
             "source_audio_asset_id": self.source_audio_asset_id,
             "audio_placeholder": self.audio_placeholder,
             "subtitles": self.subtitles,
+            "output_asset_id": self.output_asset_id,
+            "render": self.render,
             "created_at": self.created_at.isoformat(),
         }
 

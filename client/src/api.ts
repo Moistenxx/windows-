@@ -39,8 +39,10 @@ export type JobPayload = {
   voiceover_mode?: string;
   voiceover_provider_id?: number;
   source_audio_asset_id?: number;
+  output_asset_id?: number;
   audio_placeholder?: string;
   subtitles?: SubtitleCue[];
+  render?: { width?: number; height?: number; source_asset_ids?: number[]; subtitles_burned?: boolean };
   created_at?: string;
 };
 export type SubtitleCue = { start: number; end: number; text: string };
@@ -49,6 +51,7 @@ export type JobsPayload = {
   concurrency_limits: { global: number; workspace: number };
 };
 export type JobMutationPayload = { job: JobPayload; credits: CreditPayload };
+export type JobRenderPayload = JobMutationPayload & { output_asset: Asset };
 
 export type AiProvider = {
   id: number;
@@ -89,6 +92,7 @@ export type Asset = {
   tags?: string[];
   expires_at?: string;
   deleted?: boolean;
+  preview_url?: string;
 };
 
 export type AssetsPayload = { assets: Asset[] };
@@ -334,6 +338,24 @@ export async function updateJobSubtitles(
       Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify({ subtitles }),
+  });
+  return readJson(response);
+}
+
+export async function renderJob(
+  apiBase: string,
+  token: string,
+  jobId: number,
+  assetIds: number[],
+  fetcher: Fetcher = fetch,
+): Promise<JobRenderPayload> {
+  const response = await fetcher<JobRenderPayload>(apiUrl(apiBase, `/api/jobs/${jobId}/render/`), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ asset_ids: assetIds }),
   });
   return readJson(response);
 }
