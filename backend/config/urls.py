@@ -12,6 +12,7 @@ urlpatterns = [
     path("api/credits/", views.credits, name="credits"),
     path("api/credit-tasks/", views.credit_tasks, name="credit_tasks"),
     path("api/jobs/", views.jobs, name="jobs"),
+    path("api/jobs/batch-remix/", views.batch_remix, name="batch_remix"),
     path("api/jobs/<int:job_id>/transition/", views.job_transition, name="job_transition"),
     path("api/jobs/<int:job_id>/voiceover/", views.job_voiceover, name="job_voiceover"),
     path("api/jobs/<int:job_id>/subtitles/", views.job_subtitles, name="job_subtitles"),

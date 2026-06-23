@@ -845,3 +845,53 @@ class SingleVideoRenderTests(TestCase):
         self.assertEqual(response.status_code, 500)
         self.assertEqual(response.json()["job"]["status"], "failed")
         self.assertEqual(response.json()["credits"], {"workspace_id": workspace.id, "balance": 200, "frozen": 0})
+
+
+class BatchRemixTests(TestCase):
+    def test_batch_remix_creates_variant_render_jobs_with_different_hooks_and_asset_order(self):
+        user, workspace = make_user_workspace()
+        CreditRecharge.objects.create(workspace=workspace, amount=500)
+        product = Asset.objects.create(workspace=workspace, uploaded_by=user, filename="product.mp4", content_type="video/mp4", asset_type=Asset.VIDEO, object_key="batch-product", tags=["product"])
+        detail = Asset.objects.create(workspace=workspace, uploaded_by=user, filename="detail.mp4", content_type="video/mp4", asset_type=Asset.VIDEO, object_key="batch-detail", tags=["detail"])
+        token = AuthToken.issue_for(user)
+
+        response = self.client.post(
+            "/api/jobs/batch-remix/",
+            data={"asset_ids": [detail.id, product.id], "variants": 2, "estimated_credits": 50, "script": "gold bracelet"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        jobs = response.json()["jobs"]
+        self.assertEqual(len(jobs), 2)
+        self.assertEqual({job["status"] for job in jobs}, {"pending"})
+        self.assertNotEqual(jobs[0]["subtitles"][0]["text"], jobs[1]["subtitles"][0]["text"])
+        self.assertNotEqual(jobs[0]["render"]["source_asset_ids"], jobs[1]["render"]["source_asset_ids"])
+        self.assertEqual(response.json()["credits"], {"workspace_id": workspace.id, "balance": 400, "frozen": 100})
+
+    def test_regenerating_after_success_creates_new_paid_jobs(self):
+        user, workspace = make_user_workspace()
+        CreditRecharge.objects.create(workspace=workspace, amount=300)
+        asset = Asset.objects.create(workspace=workspace, uploaded_by=user, filename="product.mp4", content_type="video/mp4", asset_type=Asset.VIDEO, object_key="batch-regenerate", tags=["product"])
+        token = AuthToken.issue_for(user)
+
+        first = self.client.post(
+            "/api/jobs/batch-remix/",
+            data={"asset_ids": [asset.id], "variants": 1, "estimated_credits": 50, "script": "first"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        ).json()["jobs"][0]
+        self.client.post(f"/api/jobs/{first['id']}/transition/", data={"status": "running"}, content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {token}")
+        self.client.post(f"/api/jobs/{first['id']}/transition/", data={"status": "succeeded"}, content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {token}")
+
+        response = self.client.post(
+            "/api/jobs/batch-remix/",
+            data={"asset_ids": [asset.id], "variants": 1, "estimated_credits": 50, "script": "again"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertNotEqual(response.json()["jobs"][0]["id"], first["id"])
+        self.assertEqual(response.json()["credits"], {"workspace_id": workspace.id, "balance": 200, "frozen": 50})

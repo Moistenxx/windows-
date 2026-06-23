@@ -392,6 +392,12 @@ def ordered_render_assets(workspace, raw_ids):
         return (min(ranks) if ranks else len(RENDER_TAG_PRIORITY), asset.id)
     return sorted(assets, key=rank)
 
+def rotated(items, offset):
+    if not items:
+        return []
+    offset %= len(items)
+    return items[offset:] + items[:offset]
+
 def run_ffmpeg_render(job, output_path):
     output_path.parent.mkdir(parents=True, exist_ok=True)
     text = " ".join(str(cue.get("text", "")) for cue in job.subtitles[:2]) or job.title
@@ -426,7 +432,12 @@ def job_render(request, job_id):
     workspace = first_membership(user).workspace
     try:
         job = Job.objects.get(id=job_id, workspace=workspace)
-        assets = ordered_render_assets(workspace, read_json(request).get("asset_ids"))
+        data = read_json(request)
+        raw_asset_ids = [int(asset_id) for asset_id in data.get("asset_ids")]
+        assets = ordered_render_assets(workspace, raw_asset_ids)
+        if job.render.get("batch_id"):
+            by_id = {asset.id: asset for asset in assets}
+            assets = [by_id[asset_id] for asset_id in raw_asset_ids if asset_id in by_id]
     except Job.DoesNotExist:
         return error("Job not found", status=404)
     except (TypeError, ValueError) as exc:
@@ -464,6 +475,46 @@ def job_render(request, job_id):
         job.fail(str(exc))
         return JsonResponse({"error": "Render failed", "job": job.public_payload(), "credits": credit_payload(workspace)}, status=500)
     return JsonResponse({"job": job.public_payload(), "output_asset": output.public_payload(), "credits": credit_payload(workspace)})
+
+@csrf_exempt
+def batch_remix(request):
+    if request.method != "POST":
+        return error("POST required", status=405)
+    user, auth_error = require_user(request)
+    if auth_error:
+        return auth_error
+    workspace = first_membership(user).workspace
+    data = read_json(request)
+    try:
+        variants = int(data.get("variants", 0))
+        if variants < 1 or variants > 20:
+            raise ValueError
+        estimated_credits = int(data.get("estimated_credits", 0))
+        assets = ordered_render_assets(workspace, data.get("asset_ids"))
+        script = str(data.get("script") or "批量混剪").strip()[:200]
+    except (TypeError, ValueError) as exc:
+        return error(str(exc) or "Valid asset_ids, variants and estimated_credits required")
+    batch_id = uuid.uuid4().hex
+    jobs_created = []
+    try:
+        with transaction.atomic():
+            for index in range(variants):
+                job = Job.submit(workspace, user, estimated_credits, title=f"Batch remix {index + 1}")
+                ordered = rotated(assets, index)
+                hook = f"变体{index + 1}：{script}"
+                job.subtitles = [{"start": 0, "end": 2, "text": hook}]
+                job.render = {
+                    "batch_id": batch_id,
+                    "variant_index": index + 1,
+                    "hook": hook,
+                    "source_asset_ids": [asset.id for asset in ordered],
+                    "subtitles_burned": True,
+                }
+                job.save(update_fields=["subtitles", "render", "updated_at"])
+                jobs_created.append(job)
+    except InsufficientCredits:
+        return error("Insufficient credits", status=402)
+    return JsonResponse({"jobs": [job.public_payload() for job in jobs_created], "credits": credit_payload(workspace)}, status=201)
 
 def asset_preview(request, asset_id):
     user = preview_user(request)

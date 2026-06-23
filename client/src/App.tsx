@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useState } from "react";
 
 import {
   createAssetUpload,
+  createBatchRemix,
   createJob,
   configureJobVoiceover,
   contentTypeFor,
@@ -126,6 +127,7 @@ export function App() {
   const [durationSeconds, setDurationSeconds] = useState(30);
   const [selectedSampleIds, setSelectedSampleIds] = useState<number[]>([]);
   const [scriptText, setScriptText] = useState("");
+  const [variantCount, setVariantCount] = useState(3);
   const [taskMessage, setTaskMessage] = useState("");
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("owner@example.com");
@@ -327,15 +329,15 @@ export function App() {
     setJobs({ status: "ready", payload: upsertJobList(jobs.payload, payload.job), message: "字幕已保存" });
   }
 
-  async function renderSelectedJob(jobId: number) {
+  async function renderSelectedJob(job: JobsPayload["jobs"][number]) {
     if (auth.status !== "authenticated" || jobs.status !== "ready" || assets.status !== "ready") return;
-    const sourceIds = assets.assets.filter((asset) => asset.asset_type !== "output").map((asset) => asset.id);
+    const sourceIds = job.render?.source_asset_ids?.length ? job.render.source_asset_ids : assets.assets.filter((asset) => asset.asset_type !== "output").map((asset) => asset.id);
     if (sourceIds.length === 0) {
       setJobs({ ...jobs, message: "请先上传素材再渲染" });
       return;
     }
     try {
-      const payload = await renderJob(apiBase, auth.token, jobId, sourceIds);
+      const payload = await renderJob(apiBase, auth.token, job.id, sourceIds);
       setCredits({ status: "ready", payload: payload.credits });
       setJobs({ status: "ready", payload: upsertJobList(jobs.payload, payload.job), message: "渲染完成，可预览下载" });
       setAssets({ status: "ready", assets: [payload.output_asset, ...assets.assets.filter((asset) => asset.id !== payload.output_asset.id)] });
@@ -343,6 +345,28 @@ export function App() {
       const payload = await fetchJobs(apiBase, auth.token);
       setJobs({ status: "ready", payload, message: error instanceof Error ? error.message : "Render failed" });
       fetchCredits(apiBase, auth.token).then((payload) => setCredits({ status: "ready", payload }));
+    }
+  }
+
+  async function createRemixBatch() {
+    if (auth.status !== "authenticated" || jobs.status !== "ready" || assets.status !== "ready") return;
+    const sourceIds = assets.assets.filter((asset) => asset.asset_type !== "output").map((asset) => asset.id);
+    if (sourceIds.length === 0) {
+      setJobs({ ...jobs, message: "请先上传素材再批量混剪" });
+      return;
+    }
+    const voiceScript = scriptDraft.status === "ready" ? scriptDraft.draft.confirmed_script || scriptText : scriptText;
+    try {
+      const payload = await createBatchRemix(apiBase, auth.token, {
+        assetIds: sourceIds,
+        variants: variantCount,
+        estimatedCredits: 50,
+        script: voiceScript || "批量混剪",
+      });
+      setCredits({ status: "ready", payload: payload.credits });
+      setJobs({ status: "ready", payload: { ...jobs.payload, jobs: [...payload.jobs, ...jobs.payload.jobs] }, message: `已创建 ${payload.jobs.length} 条混剪任务` });
+    } catch (error) {
+      setJobs({ ...jobs, message: error instanceof Error ? error.message : "Batch remix failed" });
     }
   }
 
@@ -516,6 +540,8 @@ export function App() {
                 <b>任务队列</b>
                 <p>并发限制：{jobs.status === "ready" ? `全局 ${jobs.payload.concurrency_limits.global} / workspace ${jobs.payload.concurrency_limits.workspace}` : "加载中"}</p>
                 <button className="mini-action" onClick={submitDemoJob}>创建 120 积分渲染任务</button>
+                <input type="number" min={1} max={20} value={variantCount} onChange={(event) => setVariantCount(Number(event.target.value))} />
+                <button className="mini-action" onClick={createRemixBatch}>批量混剪</button>
                 {jobs.status === "loading" && <p>任务加载中...</p>}
                 {jobs.status === "error" && <p>{jobs.message}</p>}
                 {jobs.status === "ready" && jobs.message && <p>{jobs.message}</p>}
@@ -548,7 +574,7 @@ export function App() {
                         {job.status === "pending" && <button className="mini-action" onClick={() => moveJob(job.id, "running", "script")}>开始</button>}
                         {job.status === "running" && <button className="mini-action" onClick={() => moveJob(job.id, "succeeded")}>完成</button>}
                         {["pending", "running"].includes(job.status) && <button className="mini-action" onClick={() => moveJob(job.id, "failed")}>失败退款</button>}
-                        {["pending", "running"].includes(job.status) && <button className="mini-action" onClick={() => renderSelectedJob(job.id)}>渲染预览</button>}
+                        {["pending", "running"].includes(job.status) && <button className="mini-action" onClick={() => renderSelectedJob(job)}>渲染预览</button>}
                         <button className="mini-action" onClick={() => setJobVoiceover(job.id, "none")}>无配音</button>
                         <button className="mini-action" onClick={() => setJobVoiceover(job.id, "tts")}>AI配音</button>
                         <button className="mini-action" onClick={() => setJobVoiceover(job.id, "asr")}>ASR字幕</button>

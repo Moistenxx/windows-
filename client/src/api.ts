@@ -52,6 +52,7 @@ export type JobsPayload = {
 };
 export type JobMutationPayload = { job: JobPayload; credits: CreditPayload };
 export type JobRenderPayload = JobMutationPayload & { output_asset: Asset };
+export type BatchRemixPayload = { jobs: JobPayload[]; credits: CreditPayload };
 
 export type AiProvider = {
   id: number;
@@ -275,6 +276,28 @@ export async function createJob(
       Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify({ title: input.title, estimated_credits: input.estimatedCredits }),
+  });
+  return readJson(response);
+}
+
+export async function createBatchRemix(
+  apiBase: string,
+  token: string,
+  input: { assetIds: number[]; variants: number; estimatedCredits: number; script: string },
+  fetcher: Fetcher = fetch,
+): Promise<BatchRemixPayload> {
+  const response = await fetcher<BatchRemixPayload>(apiUrl(apiBase, "/api/jobs/batch-remix/"), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      asset_ids: input.assetIds,
+      variants: input.variants,
+      estimated_credits: input.estimatedCredits,
+      script: input.script,
+    }),
   });
   return readJson(response);
 }

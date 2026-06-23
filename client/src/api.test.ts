@@ -20,6 +20,7 @@ import {
   saveCustomer,
   saveViralSample,
   confirmScript,
+  createBatchRemix,
   createJob,
   configureJobVoiceover,
   submitCreditTask,
@@ -400,5 +401,28 @@ describe("render API helpers", () => {
       body: JSON.stringify({ asset_ids: [7, 8] }),
     });
     expect(result.output_asset.preview_url).toBe("/api/assets/2/preview/");
+  });
+});
+
+describe("batch remix API helpers", () => {
+  it("creates multiple queued variant jobs from one asset pool", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ jobs: [{ id: 1 }, { id: 2 }], credits: { balance: 400, frozen: 100 } }),
+    });
+
+    const result = await createBatchRemix("http://127.0.0.1:8000", "abc", {
+      assetIds: [7, 8],
+      variants: 2,
+      estimatedCredits: 50,
+      script: "gold",
+    }, fetchMock);
+
+    expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:8000/api/jobs/batch-remix/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer abc" },
+      body: JSON.stringify({ asset_ids: [7, 8], variants: 2, estimated_credits: 50, script: "gold" }),
+    });
+    expect(result.jobs).toHaveLength(2);
   });
 });
