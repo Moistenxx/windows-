@@ -14,6 +14,7 @@ Backend API and admin:
 - Admin: http://127.0.0.1:8000/admin/
 - Credit balance: `GET /api/credits/`
 - Paid task smoke: `POST /api/credit-tasks/` freezes estimated credits
+- Render worker smoke: `.\.venv\Scripts\python backend\manage.py run_render_worker --limit 1`
 
 Windows client shell:
 

@@ -1,5 +1,7 @@
+from pathlib import Path
 from unittest.mock import patch
 
+from django.conf import settings
 from django.contrib import admin
 from django.contrib.auth.models import User
 from django.test import TestCase
@@ -30,6 +32,22 @@ def make_user_workspace(email="owner@example.com"):
     workspace = Workspace.objects.create(name="owner workspace")
     WorkspaceMembership.objects.create(user=user, workspace=workspace, role="owner")
     return user, workspace
+
+
+def make_confirmed_draft(workspace, user, script="confirmed script"):
+    customer = CustomerProfile.objects.create(workspace=workspace, name="Acme")
+    template = IndustryTemplate.objects.create(name="Default", industry="retail", enabled=True)
+    provider = AIProvider.objects.create(capability=AIProvider.LLM, name="Fake LLM", model_name="fake-llm", enabled=True)
+    draft = ScriptDraft.objects.create(
+        workspace=workspace,
+        customer=customer,
+        template=template,
+        provider=provider,
+        duration_seconds=30,
+        candidates=[script],
+        confirmed_script=script,
+    )
+    return draft
 
 
 class HealthEndpointTests(TestCase):
@@ -305,11 +323,11 @@ class AIProviderTests(TestCase):
             capability=AIProvider.LLM,
             name="Volcengine Script",
             model_name="doubao-test",
-            api_key="secret-key",
+            api_key_env="VOLCENGINE_SCRIPT_KEY",
             price_coefficient=2,
             enabled=True,
         )
-        AIProvider.objects.create(capability=AIProvider.TTS, name="disabled", model_name="tts-off", api_key="secret", enabled=False)
+        AIProvider.objects.create(capability=AIProvider.TTS, name="disabled", model_name="tts-off", api_key_env="TTS_KEY", enabled=False)
 
         response = self.client.get("/api/ai/providers/", HTTP_AUTHORIZATION=f"Bearer {token}")
 
@@ -328,7 +346,13 @@ class AIProviderTests(TestCase):
                 ]
             },
         )
-        self.assertNotIn("secret-key", str(response.json()))
+        self.assertNotIn("VOLCENGINE_SCRIPT_KEY", str(response.json()))
+
+    def test_provider_stores_secret_reference_not_plaintext_api_key(self):
+        provider = AIProvider.objects.create(capability=AIProvider.LLM, name="Volcengine Script", model_name="doubao", api_key_env="VOLCENGINE_API_KEY")
+
+        self.assertEqual(provider.api_key_env, "VOLCENGINE_API_KEY")
+        self.assertNotIn("api_key", provider.public_payload())
 
     def test_cost_estimate_uses_selected_model_price_coefficient(self):
         user, _ = make_user_workspace()
@@ -337,7 +361,7 @@ class AIProviderTests(TestCase):
             capability=AIProvider.LLM,
             name="Volcengine Script",
             model_name="doubao-test",
-            api_key="secret-key",
+            api_key_env="VOLCENGINE_SCRIPT_KEY",
             price_coefficient=2.5,
             enabled=True,
         )
@@ -702,7 +726,7 @@ class ScriptGenerationTests(TestCase):
 
 
 class JobLifecycleTests(TestCase):
-    def test_user_creates_lists_and_moves_paid_job_through_lifecycle(self):
+    def test_render_job_requires_confirmed_script_before_freezing_credits(self):
         user, workspace = make_user_workspace()
         CreditRecharge.objects.create(workspace=workspace, amount=500)
         token = AuthToken.issue_for(user)
@@ -710,6 +734,40 @@ class JobLifecycleTests(TestCase):
         response = self.client.post(
             "/api/jobs/",
             data={"title": "render 9:16", "estimated_credits": 120},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(CreditAccount.objects.get(workspace=workspace).balance, 500)
+        self.assertFalse(Job.objects.filter(workspace=workspace).exists())
+
+    def test_render_job_accepts_confirmed_script_draft(self):
+        user, workspace = make_user_workspace()
+        CreditRecharge.objects.create(workspace=workspace, amount=500)
+        draft = make_confirmed_draft(workspace, user)
+        token = AuthToken.issue_for(user)
+
+        response = self.client.post(
+            "/api/jobs/",
+            data={"title": "render 9:16", "estimated_credits": 120, "script_draft_id": draft.id},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["job"]["render"]["script_draft_id"], draft.id)
+        self.assertEqual(response.json()["credits"], {"workspace_id": workspace.id, "balance": 380, "frozen": 120})
+
+    def test_user_creates_lists_and_moves_paid_job_through_lifecycle(self):
+        user, workspace = make_user_workspace()
+        CreditRecharge.objects.create(workspace=workspace, amount=500)
+        draft = make_confirmed_draft(workspace, user)
+        token = AuthToken.issue_for(user)
+
+        response = self.client.post(
+            "/api/jobs/",
+            data={"title": "render 9:16", "estimated_credits": 120, "script_draft_id": draft.id},
             content_type="application/json",
             HTTP_AUTHORIZATION=f"Bearer {token}",
         )
@@ -746,9 +804,10 @@ class JobLifecycleTests(TestCase):
     def test_concurrency_keeps_extra_jobs_pending_and_failed_jobs_refund(self):
         user, workspace = make_user_workspace()
         CreditRecharge.objects.create(workspace=workspace, amount=500)
+        draft = make_confirmed_draft(workspace, user)
         token = AuthToken.issue_for(user)
-        first = self.client.post("/api/jobs/", data={"title": "first", "estimated_credits": 100}, content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {token}").json()["job"]
-        second = self.client.post("/api/jobs/", data={"title": "second", "estimated_credits": 100}, content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {token}").json()["job"]
+        first = self.client.post("/api/jobs/", data={"title": "first", "estimated_credits": 100, "script_draft_id": draft.id}, content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {token}").json()["job"]
+        second = self.client.post("/api/jobs/", data={"title": "second", "estimated_credits": 100, "script_draft_id": draft.id}, content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {token}").json()["job"]
 
         self.client.post(f"/api/jobs/{first['id']}/transition/", data={"status": "running"}, content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {token}")
         response = self.client.post(f"/api/jobs/{second['id']}/transition/", data={"status": "running"}, content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {token}")
@@ -769,8 +828,9 @@ class VoiceoverSubtitleTests(TestCase):
         user, workspace = make_user_workspace()
         CreditRecharge.objects.create(workspace=workspace, amount=500)
         provider = AIProvider.objects.create(capability=AIProvider.TTS, name="Fake TTS", model_name="fake-tts", enabled=True)
+        draft = make_confirmed_draft(workspace, user)
         token = AuthToken.issue_for(user)
-        job = self.client.post("/api/jobs/", data={"title": "voice job", "estimated_credits": 100}, content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {token}").json()["job"]
+        job = self.client.post("/api/jobs/", data={"title": "voice job", "estimated_credits": 100, "script_draft_id": draft.id}, content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {token}").json()["job"]
 
         response = self.client.post(
             f"/api/jobs/{job['id']}/voiceover/",
@@ -807,8 +867,9 @@ class VoiceoverSubtitleTests(TestCase):
         CreditRecharge.objects.create(workspace=workspace, amount=500)
         provider = AIProvider.objects.create(capability=AIProvider.ASR, name="Fake ASR", model_name="fake-asr", enabled=True)
         asset = Asset.objects.create(workspace=workspace, uploaded_by=user, filename="source.wav", content_type="audio/wav", asset_type=Asset.AUDIO, object_key="source")
+        draft = make_confirmed_draft(workspace, user)
         token = AuthToken.issue_for(user)
-        job = self.client.post("/api/jobs/", data={"title": "asr job", "estimated_credits": 100}, content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {token}").json()["job"]
+        job = self.client.post("/api/jobs/", data={"title": "asr job", "estimated_credits": 100, "script_draft_id": draft.id}, content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {token}").json()["job"]
 
         response = self.client.post(
             f"/api/jobs/{job['id']}/voiceover/",
@@ -825,13 +886,14 @@ class VoiceoverSubtitleTests(TestCase):
 
 
 class SingleVideoRenderTests(TestCase):
-    def test_render_job_creates_9_16_downloadable_preview_asset_and_settles_credits(self):
+    def test_render_endpoint_queues_and_worker_creates_9_16_preview_asset(self):
         user, workspace = make_user_workspace()
         CreditRecharge.objects.create(workspace=workspace, amount=500)
         first = Asset.objects.create(workspace=workspace, uploaded_by=user, filename="detail.mp4", content_type="video/mp4", asset_type=Asset.VIDEO, object_key="detail", tags=["detail"])
         second = Asset.objects.create(workspace=workspace, uploaded_by=user, filename="product.mp4", content_type="video/mp4", asset_type=Asset.VIDEO, object_key="product", tags=["product"])
+        draft = make_confirmed_draft(workspace, user)
         token = AuthToken.issue_for(user)
-        job = self.client.post("/api/jobs/", data={"title": "render job", "estimated_credits": 120}, content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {token}").json()["job"]
+        job = self.client.post("/api/jobs/", data={"title": "render job", "estimated_credits": 120, "script_draft_id": draft.id}, content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {token}").json()["job"]
         self.client.post(f"/api/jobs/{job['id']}/subtitles/", data={"subtitles": [{"start": 0, "end": 1, "text": "buy now"}]}, content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {token}")
 
         response = self.client.post(
@@ -841,12 +903,24 @@ class SingleVideoRenderTests(TestCase):
             HTTP_AUTHORIZATION=f"Bearer {token}",
         )
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 202)
         payload = response.json()
+        self.assertEqual(payload["job"]["render"]["source_asset_ids"], [second.id, first.id])
+        self.assertIsNone(payload["job"]["output_asset_id"])
+        self.assertEqual(payload["credits"], {"workspace_id": workspace.id, "balance": 380, "frozen": 120})
+
+        from core import views
+        def write_output(_job, _assets, output_path):
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(b"fake mp4")
+
+        with patch("core.views.run_ffmpeg_render", side_effect=write_output) as render:
+            payload = views.complete_render_job(job["id"])
+
+        self.assertEqual([asset.id for asset in render.call_args.args[1]], [second.id, first.id])
         self.assertEqual(payload["job"]["status"], "succeeded")
         self.assertEqual(payload["job"]["render"]["width"], 1080)
         self.assertEqual(payload["job"]["render"]["height"], 1920)
-        self.assertEqual(payload["job"]["render"]["source_asset_ids"], [second.id, first.id])
         self.assertEqual(payload["output_asset"]["asset_type"], "output")
         self.assertEqual(payload["credits"], {"workspace_id": workspace.id, "balance": 380, "frozen": 0})
 
@@ -854,37 +928,72 @@ class SingleVideoRenderTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response["Content-Type"], "video/mp4")
 
-    def test_render_failure_marks_job_failed_and_refunds_credits(self):
+    def test_worker_render_failure_marks_job_failed_and_refunds_credits(self):
         user, workspace = make_user_workspace()
         CreditRecharge.objects.create(workspace=workspace, amount=200)
         asset = Asset.objects.create(workspace=workspace, uploaded_by=user, filename="clip.mp4", content_type="video/mp4", asset_type=Asset.VIDEO, object_key="clip", tags=["product"])
+        draft = make_confirmed_draft(workspace, user)
         token = AuthToken.issue_for(user)
-        job = self.client.post("/api/jobs/", data={"title": "bad render", "estimated_credits": 120}, content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {token}").json()["job"]
+        job = self.client.post("/api/jobs/", data={"title": "bad render", "estimated_credits": 120, "script_draft_id": draft.id}, content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {token}").json()["job"]
 
+        self.client.post(
+            f"/api/jobs/{job['id']}/render/",
+            data={"asset_ids": [asset.id]},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+
+        from core import views
         with patch("core.views.run_ffmpeg_render", side_effect=RuntimeError("boom")):
-            response = self.client.post(
-                f"/api/jobs/{job['id']}/render/",
-                data={"asset_ids": [asset.id]},
-                content_type="application/json",
-                HTTP_AUTHORIZATION=f"Bearer {token}",
-            )
+            payload = views.complete_render_job(job["id"])
 
-        self.assertEqual(response.status_code, 500)
-        self.assertEqual(response.json()["job"]["status"], "failed")
-        self.assertEqual(response.json()["credits"], {"workspace_id": workspace.id, "balance": 200, "frozen": 0})
+        self.assertEqual(payload["job"]["status"], "failed")
+        self.assertEqual(payload["credits"], {"workspace_id": workspace.id, "balance": 200, "frozen": 0})
+
+    def test_asset_preview_requires_header_auth_not_query_token(self):
+        user, workspace = make_user_workspace()
+        token = AuthToken.issue_for(user)
+        object_key = "preview-auth/job.mp4"
+        path = Path(settings.BASE_DIR) / "local_media" / object_key
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"fake mp4")
+        asset = Asset.objects.create(workspace=workspace, uploaded_by=user, filename="job.mp4", content_type="video/mp4", asset_type=Asset.OUTPUT, object_key=object_key)
+
+        response = self.client.get(f"/api/assets/{asset.id}/preview/?token={token}")
+        self.assertEqual(response.status_code, 401)
+
+        response = self.client.get(f"/api/assets/{asset.id}/preview/", HTTP_AUTHORIZATION=f"Bearer {token}")
+        self.assertEqual(response.status_code, 200)
 
 
 class BatchRemixTests(TestCase):
+    def test_batch_remix_requires_confirmed_script_draft(self):
+        user, workspace = make_user_workspace()
+        CreditRecharge.objects.create(workspace=workspace, amount=500)
+        asset = Asset.objects.create(workspace=workspace, uploaded_by=user, filename="product.mp4", content_type="video/mp4", asset_type=Asset.VIDEO, object_key="batch-product", tags=["product"])
+        token = AuthToken.issue_for(user)
+
+        response = self.client.post(
+            "/api/jobs/batch-remix/",
+            data={"asset_ids": [asset.id], "variants": 1, "estimated_credits": 50},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(Job.objects.filter(workspace=workspace).exists())
+
     def test_batch_remix_creates_variant_render_jobs_with_different_hooks_and_asset_order(self):
         user, workspace = make_user_workspace()
         CreditRecharge.objects.create(workspace=workspace, amount=500)
         product = Asset.objects.create(workspace=workspace, uploaded_by=user, filename="product.mp4", content_type="video/mp4", asset_type=Asset.VIDEO, object_key="batch-product", tags=["product"])
         detail = Asset.objects.create(workspace=workspace, uploaded_by=user, filename="detail.mp4", content_type="video/mp4", asset_type=Asset.VIDEO, object_key="batch-detail", tags=["detail"])
+        draft = make_confirmed_draft(workspace, user, script="gold bracelet")
         token = AuthToken.issue_for(user)
 
         response = self.client.post(
             "/api/jobs/batch-remix/",
-            data={"asset_ids": [detail.id, product.id], "variants": 2, "estimated_credits": 50, "script": "gold bracelet"},
+            data={"asset_ids": [detail.id, product.id], "variants": 2, "estimated_credits": 50, "script_draft_id": draft.id},
             content_type="application/json",
             HTTP_AUTHORIZATION=f"Bearer {token}",
         )
@@ -901,11 +1010,12 @@ class BatchRemixTests(TestCase):
         user, workspace = make_user_workspace()
         CreditRecharge.objects.create(workspace=workspace, amount=300)
         asset = Asset.objects.create(workspace=workspace, uploaded_by=user, filename="product.mp4", content_type="video/mp4", asset_type=Asset.VIDEO, object_key="batch-regenerate", tags=["product"])
+        draft = make_confirmed_draft(workspace, user, script="first")
         token = AuthToken.issue_for(user)
 
         first = self.client.post(
             "/api/jobs/batch-remix/",
-            data={"asset_ids": [asset.id], "variants": 1, "estimated_credits": 50, "script": "first"},
+            data={"asset_ids": [asset.id], "variants": 1, "estimated_credits": 50, "script_draft_id": draft.id},
             content_type="application/json",
             HTTP_AUTHORIZATION=f"Bearer {token}",
         ).json()["jobs"][0]
@@ -914,7 +1024,7 @@ class BatchRemixTests(TestCase):
 
         response = self.client.post(
             "/api/jobs/batch-remix/",
-            data={"asset_ids": [asset.id], "variants": 1, "estimated_credits": 50, "script": "again"},
+            data={"asset_ids": [asset.id], "variants": 1, "estimated_credits": 50, "script_draft_id": draft.id},
             content_type="application/json",
             HTTP_AUTHORIZATION=f"Bearer {token}",
         )

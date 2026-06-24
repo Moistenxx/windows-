@@ -11,6 +11,7 @@ import {
   estimateAiCredits,
   fetchClientVersion,
   fetchAiProviders,
+  fetchAssetPreviewBlob,
   fetchAssets,
   fetchCredits,
   fetchCustomers,
@@ -131,6 +132,7 @@ export function App() {
   const [providers, setProviders] = useState<ProviderState>({ status: "idle" });
   const [customers, setCustomers] = useState<CustomerState>({ status: "idle" });
   const [assets, setAssets] = useState<AssetState>({ status: "idle" });
+  const [previewUrls, setPreviewUrls] = useState<Record<number, string>>({});
   const [scriptAssets, setScriptAssets] = useState<ScriptAssetState>({ status: "idle" });
   const [scriptDraft, setScriptDraft] = useState<ScriptDraftState>({ status: "idle" });
   const [customerForm, setCustomerForm] = useState<CustomerProfile>({ name: "", industry: "", products: "", selling_points: "" });
@@ -287,9 +289,13 @@ export function App() {
 
   async function submitDemoJob() {
     if (auth.status !== "authenticated") return;
+    if (scriptDraft.status !== "ready" || !scriptDraft.draft.render_ready) {
+      setTaskMessage("请先生成并确认脚本，再创建渲染任务");
+      return;
+    }
     setTaskMessage("正在创建队列任务...");
     try {
-      const payload = await createJob(apiBase, auth.token, { title: "9:16 render smoke job", estimatedCredits: 120 });
+      const payload = await createJob(apiBase, auth.token, { title: "9:16 render smoke job", estimatedCredits: 120, scriptDraftId: scriptDraft.draft.id });
       setCredits({ status: "ready", payload: payload.credits });
       setJobs((state) => state.status === "ready"
         ? { status: "ready", payload: upsertJobList(state.payload, payload.job), message: "任务已进入队列" }
@@ -364,8 +370,7 @@ export function App() {
     try {
       const payload = await renderJob(apiBase, auth.token, job.id, sourceIds);
       setCredits({ status: "ready", payload: payload.credits });
-      setJobs({ status: "ready", payload: upsertJobList(jobs.payload, payload.job), message: "渲染完成，可预览下载" });
-      setAssets({ status: "ready", assets: [payload.output_asset, ...assets.assets.filter((asset) => asset.id !== payload.output_asset.id)] });
+      setJobs({ status: "ready", payload: upsertJobList(jobs.payload, payload.job), message: "已提交云端渲染队列，worker 完成后可预览下载" });
     } catch (error) {
       const payload = await fetchJobs(apiBase, auth.token);
       setJobs({ status: "ready", payload, message: error instanceof Error ? error.message : "Render failed" });
@@ -375,18 +380,21 @@ export function App() {
 
   async function createRemixBatch() {
     if (auth.status !== "authenticated" || jobs.status !== "ready" || assets.status !== "ready") return;
+    if (scriptDraft.status !== "ready" || !scriptDraft.draft.render_ready) {
+      setJobs({ ...jobs, message: "请先生成并确认脚本，再批量混剪" });
+      return;
+    }
     const sourceIds = assets.assets.filter((asset) => asset.asset_type !== "output").map((asset) => asset.id);
     if (sourceIds.length === 0) {
       setJobs({ ...jobs, message: "请先上传素材再批量混剪" });
       return;
     }
-    const voiceScript = scriptDraft.status === "ready" ? scriptDraft.draft.confirmed_script || scriptText : scriptText;
     try {
       const payload = await createBatchRemix(apiBase, auth.token, {
         assetIds: sourceIds,
         variants: variantCount,
         estimatedCredits: 50,
-        script: voiceScript || "批量混剪",
+        scriptDraftId: scriptDraft.draft.id,
       });
       setCredits({ status: "ready", payload: payload.credits });
       setJobs({ status: "ready", payload: { ...jobs.payload, jobs: [...payload.jobs, ...jobs.payload.jobs] }, message: `已创建 ${payload.jobs.length} 条混剪任务` });
@@ -395,8 +403,14 @@ export function App() {
     }
   }
 
-  function previewSrc(asset: Asset) {
-    return asset.preview_url ? `${apiBase.replace(/\/$/, "")}${asset.preview_url}?token=${encodeURIComponent(auth.status === "authenticated" ? auth.token : "")}` : "";
+  async function loadPreview(asset: Asset) {
+    if (auth.status !== "authenticated" || !asset.preview_url) return;
+    const blob = await fetchAssetPreviewBlob(apiBase, auth.token, asset.preview_url);
+    const url = URL.createObjectURL(blob);
+    setPreviewUrls((current) => {
+      if (current[asset.id]) URL.revokeObjectURL(current[asset.id]);
+      return { ...current, [asset.id]: url };
+    });
   }
 
   async function estimateSelectedProvider(providerId: number) {
@@ -574,7 +588,7 @@ export function App() {
                 <b>任务队列</b>
                 <p>并发限制：{jobs.status === "ready" ? `全局 ${jobs.payload.concurrency_limits.global} / workspace ${jobs.payload.concurrency_limits.workspace}` : "加载中"}</p>
                 <button className="mini-action" onClick={submitDemoJob}>创建 120 积分渲染任务</button>
-                <input type="number" min={1} max={20} value={variantCount} onChange={(event) => setVariantCount(Number(event.target.value))} />
+                <input type="number" aria-label="Batch remix variants" min={1} max={20} value={variantCount} onChange={(event) => setVariantCount(Number(event.target.value))} />
                 <button className="mini-action" onClick={createRemixBatch}>批量混剪</button>
                 {jobs.status === "loading" && <p>任务加载中...</p>}
                 {jobs.status === "error" && <p>{jobs.message}</p>}
@@ -588,7 +602,7 @@ export function App() {
                           #{job.id} {job.title} <span>{job.status} · {job.current_step || "等待"} · 预计等待 {job.estimated_wait_seconds}s</span>
                           <p>配音：{job.voiceover_mode || "none"} {job.audio_placeholder ? `· ${job.audio_placeholder}` : ""}</p>
                           {job.subtitles && job.subtitles.length > 0 && (
-                            <textarea
+                            <textarea aria-label="Edit subtitles"
                               defaultValue={job.subtitles.map((cue) => cue.text).join("\n")}
                               rows={Math.min(6, job.subtitles.length + 1)}
                               onBlur={(event) => saveJobSubtitleText(job, event.target.value)}
@@ -596,11 +610,17 @@ export function App() {
                           )}
                           {assets.status === "ready" && (() => {
                             const output = assets.assets.find((asset) => asset.id === job.output_asset_id);
-                            const src = output ? previewSrc(output) : "";
-                            return src ? (
+                            const src = output ? previewUrls[output.id] : "";
+                            return output ? (
                               <div>
-                                <video controls src={src} width={180} />
-                                <a href={src} download={output?.filename}>下载 MP4</a>
+                                {src ? (
+                                  <>
+                                    <video controls src={src} width={180} />
+                                    <a href={src} download={output.filename}>下载 MP4</a>
+                                  </>
+                                ) : (
+                                  <button className="mini-action" onClick={() => loadPreview(output)}>加载预览</button>
+                                )}
                               </div>
                             ) : null;
                           })()}
@@ -622,22 +642,22 @@ export function App() {
                 {customers.status === "loading" && <p>客户加载中...</p>}
                 {customers.status === "error" && <p>{customers.message}</p>}
                 {customers.status === "ready" && customers.customers.length > 0 && (
-                  <select value={customers.selectedId ?? ""} onChange={(event) => selectCustomer(Number(event.target.value))}>
+                  <select aria-label="Select customer" value={customers.selectedId ?? ""} onChange={(event) => selectCustomer(Number(event.target.value))}>
                     {customers.customers.map((customer) => (
                       <option key={customer.id} value={customer.id}>{customer.name} · {customer.industry || "未填行业"}</option>
                     ))}
                   </select>
                 )}
                 <form className="mini-form" onSubmit={submitCustomer}>
-                  <input placeholder="客户/品牌名称" value={customerForm.name} onChange={(event) => setCustomerForm({ ...customerForm, name: event.target.value })} />
-                  <input placeholder="行业" value={customerForm.industry ?? ""} onChange={(event) => setCustomerForm({ ...customerForm, industry: event.target.value })} />
-                  <input placeholder="产品/服务" value={customerForm.products ?? ""} onChange={(event) => setCustomerForm({ ...customerForm, products: event.target.value })} />
-                  <input placeholder="目标人群" value={customerForm.target_audience ?? ""} onChange={(event) => setCustomerForm({ ...customerForm, target_audience: event.target.value })} />
-                  <input placeholder="核心卖点" value={customerForm.selling_points ?? ""} onChange={(event) => setCustomerForm({ ...customerForm, selling_points: event.target.value })} />
-                  <input placeholder="禁用词/不能说的话" value={customerForm.forbidden_words ?? ""} onChange={(event) => setCustomerForm({ ...customerForm, forbidden_words: event.target.value })} />
-                  <input placeholder="联系方式/引流话术" value={customerForm.contact_hooks ?? ""} onChange={(event) => setCustomerForm({ ...customerForm, contact_hooks: event.target.value })} />
-                  <input placeholder="文案风格偏好" value={customerForm.style_preference ?? ""} onChange={(event) => setCustomerForm({ ...customerForm, style_preference: event.target.value })} />
-                  <input placeholder="Logo/常用素材备注" value={customerForm.logo_or_common_assets ?? ""} onChange={(event) => setCustomerForm({ ...customerForm, logo_or_common_assets: event.target.value })} />
+                  <input aria-label="客户/品牌名称" placeholder="客户/品牌名称" value={customerForm.name} onChange={(event) => setCustomerForm({ ...customerForm, name: event.target.value })} />
+                  <input aria-label="行业" placeholder="行业" value={customerForm.industry ?? ""} onChange={(event) => setCustomerForm({ ...customerForm, industry: event.target.value })} />
+                  <input aria-label="产品/服务" placeholder="产品/服务" value={customerForm.products ?? ""} onChange={(event) => setCustomerForm({ ...customerForm, products: event.target.value })} />
+                  <input aria-label="目标人群" placeholder="目标人群" value={customerForm.target_audience ?? ""} onChange={(event) => setCustomerForm({ ...customerForm, target_audience: event.target.value })} />
+                  <input aria-label="核心卖点" placeholder="核心卖点" value={customerForm.selling_points ?? ""} onChange={(event) => setCustomerForm({ ...customerForm, selling_points: event.target.value })} />
+                  <input aria-label="禁用词/不能说的话" placeholder="禁用词/不能说的话" value={customerForm.forbidden_words ?? ""} onChange={(event) => setCustomerForm({ ...customerForm, forbidden_words: event.target.value })} />
+                  <input aria-label="联系方式/引流话术" placeholder="联系方式/引流话术" value={customerForm.contact_hooks ?? ""} onChange={(event) => setCustomerForm({ ...customerForm, contact_hooks: event.target.value })} />
+                  <input aria-label="文案风格偏好" placeholder="文案风格偏好" value={customerForm.style_preference ?? ""} onChange={(event) => setCustomerForm({ ...customerForm, style_preference: event.target.value })} />
+                  <input aria-label="Logo/常用素材备注" placeholder="Logo/常用素材备注" value={customerForm.logo_or_common_assets ?? ""} onChange={(event) => setCustomerForm({ ...customerForm, logo_or_common_assets: event.target.value })} />
                   <button className="mini-action">保存档案</button>
                 </form>
                 {customers.status === "ready" && customers.selectedId && <p>项目创建将使用当前选中的客户档案。</p>}
@@ -649,18 +669,18 @@ export function App() {
                 {scriptAssets.status === "error" && <p>{scriptAssets.message}</p>}
                 {scriptAssets.status === "ready" && (
                   <>
-                    <select value={scriptAssets.selectedTemplateId ?? ""} onChange={(event) => selectTemplate(Number(event.target.value))}>
+                    <select aria-label="Select industry template" value={scriptAssets.selectedTemplateId ?? ""} onChange={(event) => selectTemplate(Number(event.target.value))}>
                       {scriptAssets.templates.map((template) => (
                         <option key={template.id} value={template.id}>{template.industry || "通用"} · {template.name}</option>
                       ))}
                     </select>
-                    <select value={durationSeconds} onChange={(event) => setDurationSeconds(Number(event.target.value))}>
+                    <select aria-label="Select script duration" value={durationSeconds} onChange={(event) => setDurationSeconds(Number(event.target.value))}>
                       <option value={15}>15秒</option>
                       <option value={30}>30秒</option>
                       <option value={60}>60秒</option>
                     </select>
                     {providers.status === "ready" && (
-                      <select
+                      <select aria-label="Select LLM provider"
                         value={providers.providers.find((provider) => provider.id === providers.selectedId && provider.capability === "llm")?.id ?? providers.providers.find((provider) => provider.capability === "llm")?.id ?? ""}
                         onChange={(event) => setProviders({ ...providers, selectedId: Number(event.target.value) })}
                       >
@@ -670,9 +690,9 @@ export function App() {
                       </select>
                     )}
                     <form className="mini-form" onSubmit={submitSample}>
-                      <input placeholder="抖音链接（可选）" value={sampleForm.source_url} onChange={(event) => setSampleForm({ ...sampleForm, source_url: event.target.value })} />
-                      <input placeholder="粘贴爆款文案" value={sampleForm.copy} onChange={(event) => setSampleForm({ ...sampleForm, copy: event.target.value })} />
-                      <input placeholder="标签：hook, price" value={sampleForm.tags} onChange={(event) => setSampleForm({ ...sampleForm, tags: event.target.value })} />
+                      <input aria-label="抖音链接（可选）" placeholder="抖音链接（可选）" value={sampleForm.source_url} onChange={(event) => setSampleForm({ ...sampleForm, source_url: event.target.value })} />
+                      <input aria-label="粘贴爆款文案" placeholder="粘贴爆款文案" value={sampleForm.copy} onChange={(event) => setSampleForm({ ...sampleForm, copy: event.target.value })} />
+                      <input aria-label="标签：hook, price" placeholder="标签：hook, price" value={sampleForm.tags} onChange={(event) => setSampleForm({ ...sampleForm, tags: event.target.value })} />
                       <button className="mini-action">保存参考样本</button>
                     </form>
                     {scriptAssets.message && <p>{scriptAssets.message}</p>}
@@ -705,7 +725,7 @@ export function App() {
                         <button type="button" key={candidate} onClick={() => setScriptText(candidate)}>候选 {index + 1}</button>
                       ))}
                     </div>
-                    <textarea value={scriptText} rows={8} onChange={(event) => setScriptText(event.target.value)} />
+                    <textarea aria-label="Edit confirmed script" value={scriptText} rows={8} onChange={(event) => setScriptText(event.target.value)} />
                     <button className="mini-action" type="button" onClick={confirmSelectedScript}>确认脚本</button>
                     {scriptDraft.draft.render_ready && <p>已确认，可进入后续渲染。</p>}
                   </>
@@ -714,6 +734,7 @@ export function App() {
               <div className="credit-card">
                 <b>团队素材库</b>
                 <input
+                  aria-label="Upload asset"
                   type="file"
                   accept=".mp4,.mov,.jpg,.jpeg,.png,.webp,.mp3,.wav,video/mp4,video/quicktime,image/jpeg,image/png,image/webp,audio/mpeg,audio/wav"
                   onChange={(event) => addAsset(event.target.files?.[0])}
@@ -730,6 +751,7 @@ export function App() {
                           {asset.filename} <span>{asset.asset_type} · {asset.retention_days}天</span>
                           <p>建议：{asset.suggested_tags?.join(", ") || "无"} / 当前：{asset.tags?.join(", ") || "无"}</p>
                           <input
+                            aria-label="Edit asset tags"
                             defaultValue={asset.tags?.join(", ") ?? ""}
                             placeholder="product, storefront"
                             onBlur={(event) => saveAssetTags(asset.id, event.target.value)}
@@ -748,7 +770,7 @@ export function App() {
                 {providers.status === "ready" && providers.providers.length === 0 && <p>暂无启用模型</p>}
                 {providers.status === "ready" && providers.providers.length > 0 && (
                   <>
-                    <select value={providers.selectedId ?? ""} onChange={(event) => estimateSelectedProvider(Number(event.target.value))}>
+                    <select aria-label="Select AI provider" value={providers.selectedId ?? ""} onChange={(event) => estimateSelectedProvider(Number(event.target.value))}>
                       {providers.providers.map((provider) => (
                         <option key={provider.id} value={provider.id}>
                           {provider.capability} · {provider.name} · x{provider.price_coefficient}

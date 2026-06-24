@@ -6,6 +6,7 @@ import {
   deleteAsset,
   contentTypeFor,
   fetchAiProviders,
+  fetchAssetPreviewBlob,
   fetchAssets,
   fetchCredits,
   fetchCustomers,
@@ -354,14 +355,14 @@ describe("job API helpers", () => {
       .mockResolvedValueOnce({ ok: true, json: async () => ({ jobs: [{ id: 1, status: "pending" }], concurrency_limits: { global: 2, workspace: 1 } }) })
       .mockResolvedValueOnce({ ok: true, json: async () => ({ job: { id: 1, status: "running" }, credits: { balance: 380, frozen: 120 } }) });
 
-    await createJob("http://127.0.0.1:8000", "abc", { title: "render", estimatedCredits: 120 }, fetchMock);
+    await createJob("http://127.0.0.1:8000", "abc", { title: "render", estimatedCredits: 120, scriptDraftId: 9 }, fetchMock);
     const list = await fetchJobs("http://127.0.0.1:8000", "abc", fetchMock);
     const running = await transitionJob("http://127.0.0.1:8000", "abc", 1, "running", "subtitle", fetchMock);
 
     expect(fetchMock).toHaveBeenNthCalledWith(1, "http://127.0.0.1:8000/api/jobs/", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: "Bearer abc" },
-      body: JSON.stringify({ title: "render", estimated_credits: 120 }),
+      body: JSON.stringify({ title: "render", estimated_credits: 120, script_draft_id: 9 }),
     });
     expect(fetchMock).toHaveBeenNthCalledWith(2, "http://127.0.0.1:8000/api/jobs/", {
       headers: { Authorization: "Bearer abc" },
@@ -401,13 +402,12 @@ describe("voiceover and subtitle API helpers", () => {
 });
 
 describe("render API helpers", () => {
-  it("submits a render job and receives an output asset", async () => {
+  it("queues a render job without doing worker output inline", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
-        job: { id: 1, status: "succeeded", render: { width: 1080, height: 1920 } },
-        output_asset: { id: 2, asset_type: "output", preview_url: "/api/assets/2/preview/" },
-        credits: { balance: 380, frozen: 0 },
+        job: { id: 1, status: "pending", render: { source_asset_ids: [7, 8] } },
+        credits: { balance: 380, frozen: 120 },
       }),
     });
 
@@ -418,7 +418,22 @@ describe("render API helpers", () => {
       headers: { "Content-Type": "application/json", Authorization: "Bearer abc" },
       body: JSON.stringify({ asset_ids: [7, 8] }),
     });
-    expect(result.output_asset.preview_url).toBe("/api/assets/2/preview/");
+    expect(result.job.render?.source_asset_ids).toEqual([7, 8]);
+  });
+
+  it("fetches previews with bearer auth instead of query tokens", async () => {
+    const blob = new Blob(["mp4"], { type: "video/mp4" });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      blob: async () => blob,
+    });
+
+    const result = await fetchAssetPreviewBlob("http://127.0.0.1:8000", "abc", "/api/assets/2/preview/", fetchMock);
+
+    expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:8000/api/assets/2/preview/", {
+      headers: { Authorization: "Bearer abc" },
+    });
+    expect(result).toBe(blob);
   });
 });
 
@@ -433,13 +448,13 @@ describe("batch remix API helpers", () => {
       assetIds: [7, 8],
       variants: 2,
       estimatedCredits: 50,
-      script: "gold",
+      scriptDraftId: 9,
     }, fetchMock);
 
     expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:8000/api/jobs/batch-remix/", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: "Bearer abc" },
-      body: JSON.stringify({ asset_ids: [7, 8], variants: 2, estimated_credits: 50, script: "gold" }),
+      body: JSON.stringify({ asset_ids: [7, 8], variants: 2, estimated_credits: 50, script_draft_id: 9 }),
     });
     expect(result.jobs).toHaveLength(2);
   });

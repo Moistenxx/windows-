@@ -49,7 +49,7 @@ class AIProviderAdmin(admin.ModelAdmin):
     list_display = ("capability", "name", "model_name", "enabled", "price_coefficient", "created_at")
     list_filter = ("capability", "enabled")
     search_fields = ("name", "model_name")
-    # ponytail: v1 keeps keys server-side in admin only; encrypt when real provider billing starts.
+    # ponytail: v1 stores an env-var name only; add a secret manager when real provider billing starts.
     readonly_fields = ("created_at",)
 
 

@@ -242,6 +242,7 @@ def job_list_payload(workspace):
 
 
 def fake_subtitle_cues(text):
+    # ponytail: fake timing splits sentences; replace with TTS/ASR timestamps when providers are wired.
     parts = [part.strip() for part in re.split(r"[。！？.!?\n]+", text) if part.strip()]
     return [{"start": index * 2, "end": index * 2 + 2, "text": part[:200]} for index, part in enumerate(parts or [text.strip()])]
 
@@ -274,14 +275,19 @@ def jobs(request):
         return error("GET or POST required", status=405)
     data = read_json(request)
     try:
+        draft = ScriptDraft.objects.get(id=int(data.get("script_draft_id")), workspace=workspace)
+        if not draft.confirmed_script:
+            raise ValueError
         job = Job.submit(
             workspace,
             user,
             int(data.get("estimated_credits", 0)),
             title=str(data.get("title") or "Render job").strip()[:160],
         )
-    except (TypeError, ValueError):
-        return error("Positive estimated_credits required")
+        job.render = {"script_draft_id": draft.id, "confirmed_script": draft.confirmed_script}
+        job.save(update_fields=["render", "updated_at"])
+    except (ScriptDraft.DoesNotExist, TypeError, ValueError):
+        return error("Confirmed script_draft_id and positive estimated_credits required")
     except InsufficientCredits:
         return error("Insufficient credits", status=402)
     return JsonResponse({"job": job.public_payload(), "credits": credit_payload(workspace)}, status=201)
@@ -389,7 +395,7 @@ def local_asset_path(object_key):
     return Path(settings.BASE_DIR) / "local_media" / object_key
 
 def preview_user(request):
-    return bearer_user(request) or AuthToken.user_for((request.GET.get("token") or "").strip())
+    return bearer_user(request)
 
 def ordered_render_assets(workspace, raw_ids):
     if not isinstance(raw_ids, list):
@@ -409,19 +415,29 @@ def rotated(items, offset):
     offset %= len(items)
     return items[offset:] + items[:offset]
 
-def run_ffmpeg_render(job, output_path):
+def render_source_args(assets):
+    for asset in assets:
+        if asset.asset_type not in {Asset.VIDEO, Asset.IMAGE}:
+            continue
+        path = local_asset_path(asset.object_key)
+        if not path.exists():
+            continue
+        if asset.asset_type == Asset.IMAGE:
+            return ["-loop", "1", "-t", "1", "-i", str(path)]
+        return ["-t", "1", "-i", str(path)]
+    # ponytail: local smoke falls back to black when OSS bytes are absent; real worker streams object storage.
+    return ["-f", "lavfi", "-i", "color=c=black:s=1080x1920:d=1"]
+
+def run_ffmpeg_render(job, assets, output_path):
     output_path.parent.mkdir(parents=True, exist_ok=True)
     text = " ".join(str(cue.get("text", "")) for cue in job.subtitles[:2]) or job.title
     safe_text = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff ]+", " ", text).strip()[:120] or "AI video"
     command = [
         "ffmpeg",
         "-y",
-        "-f",
-        "lavfi",
-        "-i",
-        "color=c=black:s=1080x1920:d=1",
+        *render_source_args(assets),
         "-vf",
-        f"drawtext=text='{safe_text}':fontcolor=white:fontsize=60:x=(w-text_w)/2:y=h-240",
+        f"scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,drawtext=text='{safe_text}':fontcolor=white:fontsize=60:x=(w-text_w)/2:y=h-240",
         "-c:v",
         "libx264",
         "-pix_fmt",
@@ -432,6 +448,50 @@ def run_ffmpeg_render(job, output_path):
     if result.returncode != 0 or not output_path.exists():
         raise RuntimeError(result.stderr.decode("utf-8", errors="ignore")[-500:] or "ffmpeg failed")
     return output_path
+
+def complete_render_job(job_id):
+    job = Job.objects.select_related("workspace", "created_by").get(id=job_id)
+    workspace = job.workspace
+    source_ids = [int(asset_id) for asset_id in job.render.get("source_asset_ids", [])]
+    by_id = {
+        asset.id: asset
+        for asset in Asset.objects.filter(id__in=source_ids, workspace=workspace, deleted_at__isnull=True).exclude(asset_type=Asset.OUTPUT)
+    }
+    assets = [by_id[asset_id] for asset_id in source_ids if asset_id in by_id]
+    if not assets:
+        raise ValueError("Queued render needs source_asset_ids")
+    output = None
+    object_key = f"workspaces/{workspace.id}/outputs/{uuid.uuid4().hex}/job-{job.id}.mp4"
+    output_path = local_asset_path(object_key)
+    try:
+        if job.status == Job.PENDING:
+            job.start("export")
+    except ConcurrencyLimitReached:
+        return {"job": job.public_payload(), "output_asset": None, "credits": credit_payload(workspace)}
+    try:
+        run_ffmpeg_render(job, assets, output_path)
+        output = Asset.objects.create(
+            workspace=workspace,
+            uploaded_by=job.created_by,
+            filename=f"job-{job.id}.mp4",
+            content_type="video/mp4",
+            asset_type=Asset.OUTPUT,
+            object_key=object_key,
+            tags=["output"],
+        )
+        job.output_asset = output
+        job.render = {
+            **job.render,
+            "width": 1080,
+            "height": 1920,
+            "subtitles_burned": True,
+            "source_asset_ids": source_ids,
+        }
+        job.save(update_fields=["output_asset", "render", "updated_at"])
+        job.succeed()
+    except Exception as exc:
+        job.fail(str(exc))
+    return {"job": job.public_payload(), "output_asset": output.public_payload() if output else None, "credits": credit_payload(workspace)}
 
 @csrf_exempt
 def job_render(request, job_id):
@@ -453,39 +513,12 @@ def job_render(request, job_id):
         return error("Job not found", status=404)
     except (TypeError, ValueError) as exc:
         return error(str(exc))
-    try:
-        if job.status == Job.PENDING:
-            job.start("export")
-        elif job.status != Job.RUNNING:
-            return error("Only pending or running jobs can render")
-    except ConcurrencyLimitReached:
-        return JsonResponse({"error": "Concurrency limit reached", "job": job.public_payload(), "credits": credit_payload(workspace)}, status=409)
-    object_key = f"workspaces/{workspace.id}/outputs/{uuid.uuid4().hex}/job-{job.id}.mp4"
-    output_path = local_asset_path(object_key)
-    try:
-        run_ffmpeg_render(job, output_path)
-        output = Asset.objects.create(
-            workspace=workspace,
-            uploaded_by=user,
-            filename=f"job-{job.id}.mp4",
-            content_type="video/mp4",
-            asset_type=Asset.OUTPUT,
-            object_key=object_key,
-            tags=["output"],
-        )
-        job.output_asset = output
-        job.render = {
-            "width": 1080,
-            "height": 1920,
-            "subtitles_burned": True,
-            "source_asset_ids": [asset.id for asset in assets],
-        }
-        job.save(update_fields=["output_asset", "render", "updated_at"])
-        job.succeed()
-    except Exception as exc:
-        job.fail(str(exc))
-        return JsonResponse({"error": "Render failed", "job": job.public_payload(), "credits": credit_payload(workspace)}, status=500)
-    return JsonResponse({"job": job.public_payload(), "output_asset": output.public_payload(), "credits": credit_payload(workspace)})
+    if job.status not in {Job.PENDING, Job.RUNNING}:
+        return error("Only pending or running jobs can queue render")
+    job.render = {**job.render, "source_asset_ids": [asset.id for asset in assets], "subtitles_burned": True}
+    job.current_step = "clipping"
+    job.save(update_fields=["render", "current_step", "updated_at"])
+    return JsonResponse({"job": job.public_payload(), "credits": credit_payload(workspace)}, status=202)
 
 @csrf_exempt
 def batch_remix(request):
@@ -502,9 +535,14 @@ def batch_remix(request):
             raise ValueError
         estimated_credits = int(data.get("estimated_credits", 0))
         assets = ordered_render_assets(workspace, data.get("asset_ids"))
-        script = str(data.get("script") or "批量混剪").strip()[:200]
+        draft = ScriptDraft.objects.get(id=int(data.get("script_draft_id")), workspace=workspace)
+        if not draft.confirmed_script:
+            raise ValueError
+        script = draft.confirmed_script[:200]
+    except ScriptDraft.DoesNotExist:
+        return error("Confirmed script_draft_id required")
     except (TypeError, ValueError) as exc:
-        return error(str(exc) or "Valid asset_ids, variants and estimated_credits required")
+        return error(str(exc) or "Valid asset_ids, variants, confirmed script_draft_id and estimated_credits required")
     batch_id = uuid.uuid4().hex
     jobs_created = []
     try:
@@ -516,6 +554,7 @@ def batch_remix(request):
                 job.subtitles = [{"start": 0, "end": 2, "text": hook}]
                 job.render = {
                     "batch_id": batch_id,
+                    "script_draft_id": draft.id,
                     "variant_index": index + 1,
                     "hook": hook,
                     "source_asset_ids": [asset.id for asset in ordered],
@@ -673,6 +712,7 @@ def asset_type_for(filename, content_type):
 
 
 def fake_vision_tags(filename):
+    # ponytail: filename heuristic only; replace with a vision provider job when real uploads land in OSS.
     lower = filename.lower()
     tags = [tag for tag in ASSET_TAGS if tag in lower]
     if "people" in lower or "person" in lower:
@@ -791,6 +831,7 @@ def clean_script_sample_ids(value):
     return sample_ids
 
 def fake_script_candidates(customer, template, provider, duration_seconds, samples):
+    # ponytail: deterministic candidates keep v1 testable; replace with LLM prompt orchestration when provider billing starts.
     hooks = " / ".join(sample.copy[:40] for sample in samples) or "首屏钩子"
     brief = (
         f"{customer.name}｜{customer.industry or template.industry}｜{customer.products or '产品'}｜"

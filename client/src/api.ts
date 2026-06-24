@@ -58,7 +58,7 @@ export type JobsPayload = {
   concurrency_limits: { global: number; workspace: number };
 };
 export type JobMutationPayload = { job: JobPayload; credits: CreditPayload };
-export type JobRenderPayload = JobMutationPayload & { output_asset: Asset };
+export type JobRenderPayload = JobMutationPayload;
 export type BatchRemixPayload = { jobs: JobPayload[]; credits: CreditPayload };
 
 export type AiProvider = {
@@ -162,6 +162,7 @@ type FetchResponse<T> = {
 };
 
 type Fetcher = <T = unknown>(input: string, init?: RequestInit) => Promise<FetchResponse<T>>;
+type BlobFetcher = (input: string, init?: RequestInit) => Promise<{ ok: boolean; status?: number; blob: () => Promise<Blob> }>;
 
 export const defaultApiBase = "http://127.0.0.1:8000";
 
@@ -291,7 +292,7 @@ export async function fetchJobs(
 export async function createJob(
   apiBase: string,
   token: string,
-  input: { title: string; estimatedCredits: number },
+  input: { title: string; estimatedCredits: number; scriptDraftId: number },
   fetcher: Fetcher = fetch,
 ): Promise<JobMutationPayload> {
   const response = await fetcher<JobMutationPayload>(apiUrl(apiBase, "/api/jobs/"), {
@@ -300,7 +301,7 @@ export async function createJob(
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({ title: input.title, estimated_credits: input.estimatedCredits }),
+    body: JSON.stringify({ title: input.title, estimated_credits: input.estimatedCredits, script_draft_id: input.scriptDraftId }),
   });
   return readJson(response);
 }
@@ -308,7 +309,7 @@ export async function createJob(
 export async function createBatchRemix(
   apiBase: string,
   token: string,
-  input: { assetIds: number[]; variants: number; estimatedCredits: number; script: string },
+  input: { assetIds: number[]; variants: number; estimatedCredits: number; scriptDraftId: number },
   fetcher: Fetcher = fetch,
 ): Promise<BatchRemixPayload> {
   const response = await fetcher<BatchRemixPayload>(apiUrl(apiBase, "/api/jobs/batch-remix/"), {
@@ -321,7 +322,7 @@ export async function createBatchRemix(
       asset_ids: input.assetIds,
       variants: input.variants,
       estimated_credits: input.estimatedCredits,
-      script: input.script,
+      script_draft_id: input.scriptDraftId,
     }),
   });
   return readJson(response);
@@ -406,6 +407,19 @@ export async function renderJob(
     body: JSON.stringify({ asset_ids: assetIds }),
   });
   return readJson(response);
+}
+
+export async function fetchAssetPreviewBlob(
+  apiBase: string,
+  token: string,
+  previewUrl: string,
+  fetcher: BlobFetcher = fetch,
+): Promise<Blob> {
+  const response = await fetcher(apiUrl(apiBase, previewUrl), {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) throw new Error(`Preview failed: ${response.status ?? "unknown"}`);
+  return response.blob();
 }
 
 export async function fetchAiProviders(

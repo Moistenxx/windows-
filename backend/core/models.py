@@ -130,7 +130,7 @@ class AIProvider(models.Model):
     capability = models.CharField(max_length=20, choices=CAPABILITY_CHOICES)
     name = models.CharField(max_length=120)
     model_name = models.CharField(max_length=120)
-    api_key = models.CharField(max_length=240, blank=True)
+    api_key_env = models.CharField("API key env var", max_length=120, blank=True)
     enabled = models.BooleanField(default=False)
     price_coefficient = models.DecimalField(
         max_digits=6,
@@ -145,6 +145,7 @@ class AIProvider(models.Model):
         return int((Decimal(base_credits) * self.price_coefficient).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
     def fake_call(self, prompt):
+        # ponytail: deterministic fake only; replace with provider SDK call when billing starts.
         return f"{self.model_name} generated: {prompt}"
 
     def public_payload(self):

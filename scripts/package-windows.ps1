@@ -7,10 +7,17 @@ $ErrorActionPreference = "Stop"
 
 $root = Resolve-Path (Join-Path $PSScriptRoot "..")
 $release = Join-Path $root "release"
-$package = Join-Path $release "ai-video-workbench-windows-$Version"
+$releaseRoot = [System.IO.Path]::GetFullPath($release).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+$package = Join-Path $releaseRoot "ai-video-workbench-windows-$Version"
 $zip = "$package.zip"
 
-Remove-Item $package, $zip -Recurse -Force -ErrorAction SilentlyContinue
+foreach ($target in @($package, $zip)) {
+  $fullTarget = [System.IO.Path]::GetFullPath($target)
+  if (-not $fullTarget.StartsWith($releaseRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Refusing to delete outside release: $fullTarget"
+  }
+  Remove-Item -LiteralPath $fullTarget -Recurse -Force -ErrorAction SilentlyContinue
+}
 New-Item -ItemType Directory -Path $package | Out-Null
 
 Push-Location (Join-Path $root "client")
