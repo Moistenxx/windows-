@@ -11,6 +11,7 @@ import {
   fetchCustomers,
   fetchHealth,
   fetchJobs,
+  fetchClientVersion,
   fetchMe,
   fetchScriptAssets,
   generateScripts,
@@ -27,6 +28,7 @@ import {
   transitionJob,
   updateJobSubtitles,
   updateAssetTags,
+  isNewerVersion,
 } from "./api";
 
 describe("fetchHealth", () => {
@@ -41,6 +43,22 @@ describe("fetchHealth", () => {
     expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:8000/api/health/");
     expect(health.status).toBe("ok");
     expect(health.app).toBe("ai-video-workbench");
+  });
+});
+
+describe("client update API helpers", () => {
+  it("fetches version metadata and compares versions numerically", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ platform: "windows", version: "0.1.10", download_url: "/downloads/app.zip" }),
+    });
+
+    const version = await fetchClientVersion("http://127.0.0.1:8000", fetchMock);
+
+    expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:8000/api/client/version/");
+    expect(version.version).toBe("0.1.10");
+    expect(isNewerVersion("0.1.10", "0.1.2")).toBe(true);
+    expect(isNewerVersion("0.1.0", "0.1.0")).toBe(false);
   });
 });
 

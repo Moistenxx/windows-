@@ -4,6 +4,13 @@ export type HealthPayload = {
   app: string;
 };
 
+export type ClientVersionPayload = {
+  platform: string;
+  version: string;
+  download_url: string;
+  notes?: string;
+};
+
 export type WorkspaceSummary = {
   id: number;
   name: string;
@@ -177,6 +184,24 @@ export async function fetchHealth(
 ): Promise<HealthPayload> {
   const response = await fetcher<HealthPayload>(apiUrl(apiBase, "/api/health/"));
   return readJson(response);
+}
+
+export async function fetchClientVersion(
+  apiBase = defaultApiBase,
+  fetcher: Fetcher = fetch,
+): Promise<ClientVersionPayload> {
+  const response = await fetcher<ClientVersionPayload>(apiUrl(apiBase, "/api/client/version/"));
+  return readJson(response);
+}
+
+export function isNewerVersion(remote: string, current: string) {
+  const left = remote.split(".").map((part) => Number(part) || 0);
+  const right = current.split(".").map((part) => Number(part) || 0);
+  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+    if ((left[index] ?? 0) > (right[index] ?? 0)) return true;
+    if ((left[index] ?? 0) < (right[index] ?? 0)) return false;
+  }
+  return false;
 }
 
 export async function registerWithInvite(

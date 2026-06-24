@@ -9,6 +9,7 @@ import {
   deleteAsset,
   defaultApiBase,
   estimateAiCredits,
+  fetchClientVersion,
   fetchAiProviders,
   fetchAssets,
   fetchCredits,
@@ -28,10 +29,12 @@ import {
   transitionJob,
   updateJobSubtitles,
   updateAssetTags,
+  isNewerVersion,
   type AiProvider,
   type Asset,
   type AuthPayload,
   type CreditPayload,
+  type ClientVersionPayload,
   type CustomerProfile,
   type HealthPayload,
   type IndustryTemplate,
@@ -44,12 +47,19 @@ import {
 import "./styles.css";
 
 const apiBase = import.meta.env.VITE_API_BASE_URL || defaultApiBase;
+const appVersion = import.meta.env.VITE_APP_VERSION || "0.1.0";
 const tokenKey = "ai-video-workbench-token";
 
 type HealthState =
   | { status: "loading" }
   | { status: "online"; payload: HealthPayload }
   | { status: "offline"; message: string };
+
+type UpdateState =
+  | { status: "idle" }
+  | { status: "available"; payload: ClientVersionPayload }
+  | { status: "current" }
+  | { status: "error"; message: string };
 
 type CreditState =
   | { status: "idle" }
@@ -114,6 +124,7 @@ function authFromPayload(payload: AuthPayload): AuthState {
 
 export function App() {
   const [health, setHealth] = useState<HealthState>({ status: "loading" });
+  const [update, setUpdate] = useState<UpdateState>({ status: "idle" });
   const [auth, setAuth] = useState<AuthState>({ status: "anonymous" });
   const [credits, setCredits] = useState<CreditState>({ status: "idle" });
   const [jobs, setJobs] = useState<JobState>({ status: "idle" });
@@ -147,6 +158,20 @@ export function App() {
             message: error instanceof Error ? error.message : "Unknown API error",
           });
         }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchClientVersion(apiBase)
+      .then((payload) => {
+        if (!cancelled) setUpdate(isNewerVersion(payload.version, appVersion) ? { status: "available", payload } : { status: "current" });
+      })
+      .catch((error) => {
+        if (!cancelled) setUpdate({ status: "error", message: error instanceof Error ? error.message : "Update check failed" });
       });
     return () => {
       cancelled = true;
@@ -515,6 +540,15 @@ export function App() {
             </p>
           </div>
         </div>
+        {update.status === "available" && (
+          <div className="status-card" data-state="online">
+            <span className="status-dot" />
+            <div>
+              <strong>发现新版本 {update.payload.version}</strong>
+              <p>{update.payload.notes || "建议更新 Windows 客户端"} · <a href={update.payload.download_url}>下载更新</a></p>
+            </div>
+          </div>
+        )}
 
         {auth.status === "authenticated" ? (
           <section className="auth-panel">

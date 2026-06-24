@@ -37,6 +37,17 @@ def health(request):
     return JsonResponse({"status": "ok", "service": "api", "app": "ai-video-workbench"})
 
 
+def client_version(request):
+    return JsonResponse(
+        {
+            "platform": "windows",
+            "version": "0.1.0",
+            "download_url": "/downloads/ai-video-workbench-windows.zip",
+            "notes": "Windows client preview build",
+        }
+    )
+
+
 def read_json(request):
     try:
         return json.loads(request.body.decode("utf-8") or "{}")

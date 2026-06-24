@@ -10,3 +10,4 @@ client/dist/
 client/.vite/
 *.tsbuildinfo
 prototypes/
+release/

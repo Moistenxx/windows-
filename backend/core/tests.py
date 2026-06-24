@@ -43,6 +43,16 @@ class HealthEndpointTests(TestCase):
         )
         self.assertEqual(response["Access-Control-Allow-Origin"], "*")
 
+class ClientVersionTests(TestCase):
+    def test_client_version_metadata_is_public_for_update_checks(self):
+        response = self.client.get("/api/client/version/")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["platform"], "windows")
+        self.assertTrue(payload["version"])
+        self.assertIn("download", payload["download_url"])
+
 
 class AdminEntryTests(TestCase):
     def test_admin_entry_is_reachable(self):
