@@ -126,7 +126,7 @@ class CreditTaskAdmin(admin.ModelAdmin):
 
 @admin.register(Job)
 class JobAdmin(admin.ModelAdmin):
-    list_display = ("workspace", "title", "status", "current_step", "estimated_wait_seconds", "created_at")
-    list_filter = ("status", "current_step")
-    search_fields = ("workspace__name", "title")
+    list_display = ("workspace", "title", "status", "capability", "provider", "current_step", "estimated_wait_seconds", "created_at")
+    list_filter = ("status", "capability", "current_step")
+    search_fields = ("workspace__name", "title", "provider__name")
     readonly_fields = ("created_at", "updated_at")

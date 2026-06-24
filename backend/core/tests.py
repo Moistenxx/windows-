@@ -367,6 +367,23 @@ class AIProviderTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["output"], "fake-llm generated: gold jewelry")
 
+    def test_disabled_future_providers_are_supported_but_not_shown_to_users(self):
+        user, workspace = make_user_workspace()
+        CreditRecharge.objects.create(workspace=workspace, amount=100)
+        token = AuthToken.issue_for(user)
+        provider = AIProvider.objects.create(capability=AIProvider.DIGITAL_HUMAN, name="Future Human", model_name="future-human", enabled=False)
+        job = Job.submit(workspace, user, 10, title="future placeholder")
+        job.capability = AIProvider.DIGITAL_HUMAN
+        job.provider = provider
+        job.save(update_fields=["capability", "provider", "updated_at"])
+
+        response = self.client.get("/api/ai/providers/", HTTP_AUTHORIZATION=f"Bearer {token}")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"providers": []})
+        self.assertEqual(job.public_payload()["capability"], AIProvider.DIGITAL_HUMAN)
+        self.assertEqual(job.public_payload()["provider_id"], provider.id)
+
 
 class CustomerProfileTests(TestCase):
     def test_authenticated_user_can_create_list_and_update_workspace_profile(self):

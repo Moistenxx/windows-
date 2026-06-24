@@ -109,12 +109,22 @@ class AIProvider(models.Model):
     ASR = "asr"
     VISION = "vision"
     VIDEO = "video"
+    IMAGE = "image"
+    DIGITAL_HUMAN = "digital_human"
+    AI_VIDEO = "ai_video"
+    VOICE_CLONE = "voice_clone"
+    COMFYUI = "comfyui"
     CAPABILITY_CHOICES = [
         (LLM, "LLM"),
         (TTS, "TTS"),
         (ASR, "ASR"),
         (VISION, "Vision"),
         (VIDEO, "Video"),
+        (IMAGE, "AI Image"),
+        (DIGITAL_HUMAN, "Digital Human"),
+        (AI_VIDEO, "AI Video"),
+        (VOICE_CLONE, "Voice Clone"),
+        (COMFYUI, "ComfyUI"),
     ]
 
     capability = models.CharField(max_length=20, choices=CAPABILITY_CHOICES)
@@ -422,6 +432,8 @@ class Job(models.Model):
     workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name="jobs")
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="jobs")
     credit_task = models.ForeignKey(CreditTask, on_delete=models.SET_NULL, null=True, blank=True, related_name="jobs")
+    provider = models.ForeignKey(AIProvider, on_delete=models.SET_NULL, null=True, blank=True, related_name="jobs")
+    capability = models.CharField(max_length=40, blank=True)
     title = models.CharField(max_length=160, default="Render job")
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=PENDING)
     steps = models.JSONField(default=list, blank=True)
@@ -502,6 +514,8 @@ class Job(models.Model):
             "estimated_wait_seconds": self.estimated_wait_seconds,
             "error_message": self.error_message,
             "credit_task_id": self.credit_task_id,
+            "provider_id": self.provider_id,
+            "capability": self.capability,
             "voiceover_mode": self.voiceover_mode,
             "voiceover_provider_id": self.voiceover_provider_id,
             "source_audio_asset_id": self.source_audio_asset_id,
