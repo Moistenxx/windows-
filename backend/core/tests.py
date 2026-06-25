@@ -709,6 +709,31 @@ class TemplateAndViralSampleTests(TestCase):
 
 
 class ScriptGenerationTests(TestCase):
+    def test_script_generation_uses_real_ark_provider_when_selected(self):
+        user, workspace = make_user_workspace()
+        token = AuthToken.issue_for(user)
+        customer = CustomerProfile.objects.create(
+            workspace=workspace,
+            name="珠宝店",
+            industry="珠宝",
+            products="黄金手镯",
+            selling_points="保真低工费",
+        )
+        template = IndustryTemplate.objects.create(name="黄金爆款", industry="珠宝", enabled=True)
+        provider = AIProvider.objects.create(capability=AIProvider.LLM, name="Ark", model_name="ep-test", api_key_env="ARK_API_KEY", enabled=True)
+
+        with patch("core.views.ark_chat", return_value="第一条\n---\n第二条\n---\n第三条") as chat:
+            response = self.client.post(
+                "/api/scripts/generate/",
+                data={"customer_id": customer.id, "template_id": template.id, "provider_id": provider.id, "duration_seconds": 30, "sample_ids": []},
+                content_type="application/json",
+                HTTP_AUTHORIZATION=f"Bearer {token}",
+            )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["candidates"], ["第一条", "第二条", "第三条"])
+        chat.assert_called_once()
+
     def test_fake_llm_generates_candidates_without_freezing_credits_and_user_confirms_one(self):
         user, workspace = make_user_workspace()
         customer = CustomerProfile.objects.create(workspace=workspace, name="Acme", industry="jewelry", products="gold", selling_points="certified")

@@ -31,6 +31,7 @@ from .models import (
     Workspace,
     WorkspaceMembership,
 )
+from .provider_clients import ProviderError, ark_chat
 
 
 def health(request):
@@ -845,6 +846,31 @@ def fake_script_candidates(customer, template, provider, duration_seconds, sampl
         for i in range(1, 4)
     ]
 
+def split_script_candidates(text):
+    chunks = [chunk.strip() for chunk in text.split("---") if chunk.strip()]
+    if len(chunks) >= 3:
+        return chunks[:3]
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return (lines + [text.strip()])[:3]
+
+
+def real_script_candidates(customer, template, provider, duration_seconds, samples):
+    sample_text = "\n".join(f"- {sample.copy[:160]}" for sample in samples)
+    prompt = (
+        f"??????????????{customer.name}??3?{duration_seconds}?????????\n"
+        f"???{customer.industry or template.industry}\n???{customer.products}\n???{customer.selling_points}\n"
+        f"????{customer.forbidden_words}\n?????\n{sample_text}\n"
+        "????? --- ?????????????????????"
+    )
+    return split_script_candidates(ark_chat(provider, [{"role": "user", "content": prompt}]))
+
+
+def script_candidates(customer, template, provider, duration_seconds, samples):
+    if provider.api_key_env:
+        return real_script_candidates(customer, template, provider, duration_seconds, samples)
+    return fake_script_candidates(customer, template, provider, duration_seconds, samples)
+
+
 @csrf_exempt
 def script_generate(request):
     if request.method != "POST":
@@ -869,6 +895,8 @@ def script_generate(request):
         samples = [samples_by_id[sample_id] for sample_id in sample_ids]
     except (CustomerProfile.DoesNotExist, IndustryTemplate.DoesNotExist, AIProvider.DoesNotExist, TypeError, ValueError):
         return error("Valid customer_id, template_id, provider_id, duration_seconds and sample_ids required")
+    except ProviderError as exc:
+        return error(str(exc), status=502)
 
     draft = ScriptDraft.objects.create(
         workspace=workspace,
@@ -877,7 +905,7 @@ def script_generate(request):
         provider=provider,
         duration_seconds=duration_seconds,
         sample_ids=sample_ids,
-        candidates=fake_script_candidates(customer, template, provider, duration_seconds, samples),
+        candidates=script_candidates(customer, template, provider, duration_seconds, samples),
     )
     return JsonResponse(draft.public_payload(), status=201)
 
