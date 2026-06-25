@@ -12,7 +12,7 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         rendered = 0
-        for job in Job.objects.filter(status=Job.PENDING, output_asset__isnull=True).order_by("created_at", "id"):
+        for job in Job.objects.filter(status__in=[Job.PENDING, Job.RUNNING], output_asset__isnull=True).order_by("created_at", "id"):
             if not job.render.get("source_asset_ids"):
                 continue
             complete_render_job(job.id)

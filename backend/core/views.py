@@ -276,7 +276,7 @@ def jobs(request):
     data = read_json(request)
     try:
         draft = ScriptDraft.objects.get(id=int(data.get("script_draft_id")), workspace=workspace)
-        if not draft.confirmed_script:
+        if not draft.render_ready:
             raise ValueError
         job = Job.submit(
             workspace,
@@ -452,21 +452,24 @@ def run_ffmpeg_render(job, assets, output_path):
 def complete_render_job(job_id):
     job = Job.objects.select_related("workspace", "created_by").get(id=job_id)
     workspace = job.workspace
-    source_ids = [int(asset_id) for asset_id in job.render.get("source_asset_ids", [])]
-    by_id = {
-        asset.id: asset
-        for asset in Asset.objects.filter(id__in=source_ids, workspace=workspace, deleted_at__isnull=True).exclude(asset_type=Asset.OUTPUT)
-    }
-    assets = [by_id[asset_id] for asset_id in source_ids if asset_id in by_id]
-    if not assets:
-        raise ValueError("Queued render needs source_asset_ids")
     output = None
     object_key = f"workspaces/{workspace.id}/outputs/{uuid.uuid4().hex}/job-{job.id}.mp4"
     output_path = local_asset_path(object_key)
     try:
+        source_ids = [int(asset_id) for asset_id in job.render.get("source_asset_ids", [])]
+        by_id = {
+            asset.id: asset
+            for asset in Asset.objects.filter(id__in=source_ids, workspace=workspace, deleted_at__isnull=True).exclude(asset_type=Asset.OUTPUT)
+        }
+        assets = [by_id[asset_id] for asset_id in source_ids if asset_id in by_id]
+        if not assets:
+            raise ValueError("Queued render needs source_asset_ids")
         if job.status == Job.PENDING:
             job.start("export")
     except ConcurrencyLimitReached:
+        return {"job": job.public_payload(), "output_asset": None, "credits": credit_payload(workspace)}
+    except Exception as exc:
+        job.fail(str(exc))
         return {"job": job.public_payload(), "output_asset": None, "credits": credit_payload(workspace)}
     try:
         run_ffmpeg_render(job, assets, output_path)
@@ -536,7 +539,7 @@ def batch_remix(request):
         estimated_credits = int(data.get("estimated_credits", 0))
         assets = ordered_render_assets(workspace, data.get("asset_ids"))
         draft = ScriptDraft.objects.get(id=int(data.get("script_draft_id")), workspace=workspace)
-        if not draft.confirmed_script:
+        if not draft.render_ready:
             raise ValueError
         script = draft.confirmed_script[:200]
     except ScriptDraft.DoesNotExist:

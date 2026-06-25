@@ -1,11 +1,14 @@
+from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
 from django.conf import settings
 from django.contrib import admin
 from django.contrib.auth.models import User
+from django.core.management import call_command
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
 
 from core.models import (
     Asset,
@@ -46,6 +49,7 @@ def make_confirmed_draft(workspace, user, script="confirmed script"):
         duration_seconds=30,
         candidates=[script],
         confirmed_script=script,
+        confirmed_at=timezone.now(),
     )
     return draft
 
@@ -742,6 +746,25 @@ class JobLifecycleTests(TestCase):
         self.assertEqual(CreditAccount.objects.get(workspace=workspace).balance, 500)
         self.assertFalse(Job.objects.filter(workspace=workspace).exists())
 
+    def test_render_job_rejects_draft_text_without_confirmation_timestamp(self):
+        user, workspace = make_user_workspace()
+        CreditRecharge.objects.create(workspace=workspace, amount=500)
+        draft = make_confirmed_draft(workspace, user)
+        draft.confirmed_at = None
+        draft.save(update_fields=["confirmed_at"])
+        token = AuthToken.issue_for(user)
+
+        response = self.client.post(
+            "/api/jobs/",
+            data={"title": "render 9:16", "estimated_credits": 120, "script_draft_id": draft.id},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(CreditAccount.objects.get(workspace=workspace).balance, 500)
+        self.assertFalse(Job.objects.filter(workspace=workspace).exists())
+
     def test_render_job_accepts_confirmed_script_draft(self):
         user, workspace = make_user_workspace()
         CreditRecharge.objects.create(workspace=workspace, amount=500)
@@ -950,6 +973,44 @@ class SingleVideoRenderTests(TestCase):
         self.assertEqual(payload["job"]["status"], "failed")
         self.assertEqual(payload["credits"], {"workspace_id": workspace.id, "balance": 200, "frozen": 0})
 
+    def test_worker_missing_queued_assets_marks_job_failed_and_refunds_credits(self):
+        user, workspace = make_user_workspace()
+        CreditRecharge.objects.create(workspace=workspace, amount=200)
+        asset = Asset.objects.create(workspace=workspace, uploaded_by=user, filename="clip.mp4", content_type="video/mp4", asset_type=Asset.VIDEO, object_key="deleted-clip", tags=["product"])
+        draft = make_confirmed_draft(workspace, user)
+        token = AuthToken.issue_for(user)
+        job = self.client.post("/api/jobs/", data={"title": "missing asset render", "estimated_credits": 120, "script_draft_id": draft.id}, content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {token}").json()["job"]
+        self.client.post(f"/api/jobs/{job['id']}/render/", data={"asset_ids": [asset.id]}, content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {token}")
+        asset.deleted_at = timezone.now()
+        asset.save(update_fields=["deleted_at"])
+
+        from core import views
+        payload = views.complete_render_job(job["id"])
+
+        self.assertEqual(payload["job"]["status"], "failed")
+        self.assertEqual(payload["credits"], {"workspace_id": workspace.id, "balance": 200, "frozen": 0})
+
+    def test_render_worker_processes_running_queued_jobs(self):
+        user, workspace = make_user_workspace()
+        CreditRecharge.objects.create(workspace=workspace, amount=200)
+        asset = Asset.objects.create(workspace=workspace, uploaded_by=user, filename="clip.mp4", content_type="video/mp4", asset_type=Asset.VIDEO, object_key="running-clip", tags=["product"])
+        draft = make_confirmed_draft(workspace, user)
+        token = AuthToken.issue_for(user)
+        job = self.client.post("/api/jobs/", data={"title": "running render", "estimated_credits": 120, "script_draft_id": draft.id}, content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {token}").json()["job"]
+        self.client.post(f"/api/jobs/{job['id']}/render/", data={"asset_ids": [asset.id]}, content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {token}")
+        self.client.post(f"/api/jobs/{job['id']}/transition/", data={"status": "running"}, content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {token}")
+
+        def write_output(_job, _assets, output_path):
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(b"fake mp4")
+
+        output = StringIO()
+        with patch("core.views.run_ffmpeg_render", side_effect=write_output):
+            call_command("run_render_worker", limit=1, stdout=output)
+
+        self.assertIn("rendered 1", output.getvalue())
+        self.assertEqual(Job.objects.get(id=job["id"]).status, Job.SUCCEEDED)
+
     def test_asset_preview_requires_header_auth_not_query_token(self):
         user, workspace = make_user_workspace()
         token = AuthToken.issue_for(user)
@@ -976,6 +1037,25 @@ class BatchRemixTests(TestCase):
         response = self.client.post(
             "/api/jobs/batch-remix/",
             data={"asset_ids": [asset.id], "variants": 1, "estimated_credits": 50},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(Job.objects.filter(workspace=workspace).exists())
+
+    def test_batch_remix_rejects_draft_text_without_confirmation_timestamp(self):
+        user, workspace = make_user_workspace()
+        CreditRecharge.objects.create(workspace=workspace, amount=500)
+        asset = Asset.objects.create(workspace=workspace, uploaded_by=user, filename="product.mp4", content_type="video/mp4", asset_type=Asset.VIDEO, object_key="batch-product", tags=["product"])
+        draft = make_confirmed_draft(workspace, user)
+        draft.confirmed_at = None
+        draft.save(update_fields=["confirmed_at"])
+        token = AuthToken.issue_for(user)
+
+        response = self.client.post(
+            "/api/jobs/batch-remix/",
+            data={"asset_ids": [asset.id], "variants": 1, "estimated_credits": 50, "script_draft_id": draft.id},
             content_type="application/json",
             HTTP_AUTHORIZATION=f"Bearer {token}",
         )
