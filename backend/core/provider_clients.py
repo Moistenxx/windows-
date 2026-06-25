@@ -78,3 +78,23 @@ def doubao_asr(provider, asset_path, timeout=120):
     if not isinstance(segments, list):
         raise ProviderError("ASR response missing segments")
     return [{"start": float(item["start"]), "end": float(item["end"]), "text": str(item["text"])[:200]} for item in segments]
+
+
+def require_capability(provider, capability):
+    if provider.capability != capability:
+        raise ProviderError(f"Provider {provider.id} is not {capability}")
+
+
+def generate_image(prompt, provider):
+    require_capability(provider, "image")
+    return ark_chat(provider, [{"role": "user", "content": prompt}])
+
+
+def generate_video(prompt, provider):
+    require_capability(provider, "video")
+    return ark_chat(provider, [{"role": "user", "content": prompt}])
+
+
+def generate_digital_human(script, provider):
+    require_capability(provider, "digital_human")
+    return ark_chat(provider, [{"role": "user", "content": script}])

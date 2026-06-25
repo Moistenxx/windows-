@@ -465,6 +465,16 @@ class ProviderClientTests(TestCase):
         with patch.dict(os.environ, {"ARK_API_KEY": "test-key"}, clear=True), patch("core.provider_clients.urlopen", side_effect=fake_urlopen):
             self.assertEqual(provider_clients.ark_chat(provider, [{"role": "user", "content": "hi"}]), "候选脚本")
 
+    def test_future_generation_seams_require_matching_capability(self):
+        provider = AIProvider.objects.create(capability=AIProvider.IMAGE, name="Ark Image", model_name="image", api_key_env="ARK_API_KEY", enabled=True)
+        from core.provider_clients import ProviderError, generate_digital_human, generate_image
+
+        with patch("core.provider_clients.ark_chat", return_value="asset-url"):
+            self.assertEqual(generate_image("黄金手镯海报", provider), "asset-url")
+
+        with self.assertRaises(ProviderError):
+            generate_digital_human("口播脚本", provider)
+
 
 class CustomerProfileTests(TestCase):
     def test_authenticated_user_can_create_list_and_update_workspace_profile(self):
