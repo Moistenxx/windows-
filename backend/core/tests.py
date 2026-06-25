@@ -483,9 +483,16 @@ class ProviderClientTests(TestCase):
         def fake_urlopen(request, timeout):
             body = json.loads(request.data.decode("utf-8"))
             self.assertEqual(body["voice_type"], "voice")
+            self.assertEqual(body["app_id"], "speech-app")
+            self.assertEqual(body["cluster"], "volcano_tts")
             return FakeHttpResponse({"audio": b64encode(b"mp3-bytes").decode("ascii")})
 
-        env = {"VOLCENGINE_SPEECH_ACCESS_TOKEN": "speech-token", "VOLCENGINE_TTS_URL": "https://speech.example/tts"}
+        env = {
+            "VOLCENGINE_SPEECH_ACCESS_TOKEN": "speech-token",
+            "VOLCENGINE_TTS_URL": "https://speech.example/tts",
+            "VOLCENGINE_SPEECH_APP_ID": "speech-app",
+            "VOLCENGINE_TTS_CLUSTER": "volcano_tts",
+        }
         with patch.dict(os.environ, env, clear=True), patch("core.provider_clients.urlopen", side_effect=fake_urlopen):
             self.assertEqual(provider_clients.doubao_tts(provider, "你好"), b"mp3-bytes")
 

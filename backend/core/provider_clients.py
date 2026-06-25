@@ -55,7 +55,12 @@ def doubao_tts(provider, text, timeout=60):
     data = post_json(
         url,
         provider_api_key(provider),
-        {"text": text, "voice_type": os.environ.get("VOLCENGINE_TTS_VOICE_TYPE", provider.model_name)},
+        {
+            "text": text,
+            "voice_type": os.environ.get("VOLCENGINE_TTS_VOICE_TYPE", provider.model_name),
+            "app_id": os.environ.get("VOLCENGINE_SPEECH_APP_ID", ""),
+            "cluster": os.environ.get("VOLCENGINE_TTS_CLUSTER", ""),
+        },
         timeout=timeout,
     )
     audio = data.get("audio") or data.get("data")

@@ -36,8 +36,10 @@ Launch/download page:
 
 - `ARK_API_KEY`: Ark data-plane API key.
 - `ARK_BASE_URL`: optional, defaults to `https://ark.cn-beijing.volces.com/api/v3`.
+- `VOLCENGINE_SPEECH_APP_ID`: Doubao Speech app id.
 - `VOLCENGINE_SPEECH_ACCESS_TOKEN`: Doubao Speech token.
 - `VOLCENGINE_TTS_URL`: TTS API URL used by the v1 adapter.
+- `VOLCENGINE_TTS_CLUSTER`: TTS cluster.
 - `VOLCENGINE_TTS_VOICE_TYPE`: optional TTS voice type; falls back to provider `model_name`.
 - `VOLCENGINE_ASR_URL`: ASR API URL used by the v1 adapter.
 
