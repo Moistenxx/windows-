@@ -1,5 +1,6 @@
 import json
 import os
+from base64 import b64encode
 from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
@@ -474,6 +475,19 @@ class ProviderClientTests(TestCase):
 
         with self.assertRaises(ProviderError):
             generate_digital_human("口播脚本", provider)
+
+    def test_doubao_tts_decodes_base64_audio(self):
+        provider = AIProvider.objects.create(capability=AIProvider.TTS, name="Doubao TTS", model_name="voice", api_key_env="VOLCENGINE_SPEECH_ACCESS_TOKEN", enabled=True)
+        from core import provider_clients
+
+        def fake_urlopen(request, timeout):
+            body = json.loads(request.data.decode("utf-8"))
+            self.assertEqual(body["voice_type"], "voice")
+            return FakeHttpResponse({"audio": b64encode(b"mp3-bytes").decode("ascii")})
+
+        env = {"VOLCENGINE_SPEECH_ACCESS_TOKEN": "speech-token", "VOLCENGINE_TTS_URL": "https://speech.example/tts"}
+        with patch.dict(os.environ, env, clear=True), patch("core.provider_clients.urlopen", side_effect=fake_urlopen):
+            self.assertEqual(provider_clients.doubao_tts(provider, "你好"), b"mp3-bytes")
 
 
 class CustomerProfileTests(TestCase):

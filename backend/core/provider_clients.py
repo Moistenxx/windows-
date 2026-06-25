@@ -1,3 +1,5 @@
+import base64
+import binascii
 import json
 import os
 from urllib.error import HTTPError, URLError
@@ -59,7 +61,12 @@ def doubao_tts(provider, text, timeout=60):
     audio = data.get("audio") or data.get("data")
     if audio is None:
         raise ProviderError("TTS response missing audio")
-    return audio if isinstance(audio, bytes) else str(audio).encode("utf-8")
+    if isinstance(audio, bytes):
+        return audio
+    try:
+        return base64.b64decode(str(audio), validate=True)
+    except (binascii.Error, ValueError):
+        return str(audio).encode("utf-8")
 
 
 def doubao_asr(provider, asset_path, timeout=120):
@@ -71,7 +78,7 @@ def doubao_asr(provider, asset_path, timeout=120):
     data = post_json(
         url,
         provider_api_key(provider),
-        {"audio": asset_path.read_bytes().hex(), "model": provider.model_name},
+        {"audio": base64.b64encode(asset_path.read_bytes()).decode("ascii"), "model": provider.model_name},
         timeout=timeout,
     )
     segments = data.get("segments") or data.get("result", {}).get("segments")
