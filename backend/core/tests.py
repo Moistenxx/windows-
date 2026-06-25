@@ -595,6 +595,22 @@ class AssetLibraryTests(TestCase):
 
 
 class AssetTaggingTests(TestCase):
+    def test_asset_upload_uses_vision_provider_for_suggested_tags(self):
+        user, _ = make_user_workspace()
+        token = AuthToken.issue_for(user)
+        AIProvider.objects.create(capability=AIProvider.VISION, name="Ark Vision", model_name="ep-vision", api_key_env="ARK_API_KEY", enabled=True)
+
+        with patch("core.views.ark_chat", return_value="product, jewelry, gold"):
+            response = self.client.post(
+                "/api/assets/",
+                data={"filename": "gold.jpg", "content_type": "image/jpeg"},
+                content_type="application/json",
+                HTTP_AUTHORIZATION=f"Bearer {token}",
+            )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["asset"]["suggested_tags"], ["product", "jewelry", "gold"])
+
     def test_asset_upload_gets_fake_vision_suggestions_and_user_can_correct_tags(self):
         user, _ = make_user_workspace()
         token = AuthToken.issue_for(user)

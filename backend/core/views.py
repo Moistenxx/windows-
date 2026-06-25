@@ -729,6 +729,22 @@ def fake_vision_tags(filename):
     return list(dict.fromkeys(tags or ["product"]))
 
 
+def parse_provider_tags(text):
+    return [tag.strip()[:40] for tag in text.replace("，", ",").split(",") if tag.strip()][:8]
+
+
+def suggested_tags_for_upload(filename):
+    provider = AIProvider.objects.filter(capability=AIProvider.VISION, enabled=True).order_by("id").first()
+    if provider:
+        try:
+            tags = parse_provider_tags(ark_chat(provider, [{"role": "user", "content": f"为素材文件名生成短标签，逗号分隔：{filename}"}]))
+            if tags:
+                return tags
+        except ProviderError:
+            pass
+    return fake_vision_tags(filename)
+
+
 def clean_asset_tags(raw_tags):
     if not isinstance(raw_tags, list):
         raise ValueError("tags must be a list")
@@ -760,7 +776,7 @@ def assets(request):
         asset_type = asset_type_for(filename, content_type)
     except ValueError as exc:
         return error(str(exc))
-    suggested_tags = fake_vision_tags(filename)
+    suggested_tags = suggested_tags_for_upload(filename)
     asset = Asset.objects.create(
         workspace=workspace,
         uploaded_by=user,
