@@ -31,7 +31,7 @@ from .models import (
     Workspace,
     WorkspaceMembership,
 )
-from .provider_clients import ProviderError, ark_chat, doubao_tts
+from .provider_clients import ProviderError, ark_chat, doubao_asr, doubao_tts
 
 
 def health(request):
@@ -376,7 +376,10 @@ def job_voiceover(request, job_id):
             job.voiceover_provider = provider
             job.source_audio_asset = asset
             job.audio_placeholder = ""
-            job.subtitles = [{"start": 0, "end": 2, "text": f"ASR subtitles for {asset.filename}"}]
+            if provider.api_key_env:
+                job.subtitles = doubao_asr(provider, local_asset_path(asset.object_key))
+            else:
+                job.subtitles = [{"start": 0, "end": 2, "text": f"ASR subtitles for {asset.filename}"}]
         else:
             return error("Supported voiceover mode required")
         if "subtitles" in data:

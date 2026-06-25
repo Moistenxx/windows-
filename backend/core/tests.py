@@ -941,6 +941,26 @@ class JobLifecycleTests(TestCase):
 
 
 class VoiceoverSubtitleTests(TestCase):
+    def test_asr_voiceover_uses_provider_segments(self):
+        user, workspace = make_user_workspace()
+        CreditRecharge.objects.create(workspace=workspace, amount=500)
+        token = AuthToken.issue_for(user)
+        provider = AIProvider.objects.create(capability=AIProvider.ASR, name="Doubao ASR", model_name="asr", api_key_env="VOLCENGINE_SPEECH_ACCESS_TOKEN", enabled=True)
+        asset = Asset.objects.create(workspace=workspace, uploaded_by=user, filename="clip.mp4", content_type="video/mp4", asset_type=Asset.VIDEO, object_key="asr/clip.mp4")
+        draft = make_confirmed_draft(workspace, user)
+        job = self.client.post("/api/jobs/", data={"title": "asr job", "estimated_credits": 100, "script_draft_id": draft.id}, content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {token}").json()["job"]
+
+        with patch("core.views.doubao_asr", return_value=[{"start": 0, "end": 1.5, "text": "你好"}]):
+            response = self.client.post(
+                f"/api/jobs/{job['id']}/voiceover/",
+                data={"mode": "asr", "provider_id": provider.id, "asset_id": asset.id},
+                content_type="application/json",
+                HTTP_AUTHORIZATION=f"Bearer {token}",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["job"]["subtitles"], [{"start": 0, "end": 1.5, "text": "你好"}])
+
     def test_tts_voiceover_creates_audio_asset_from_provider_bytes(self):
         user, workspace = make_user_workspace()
         CreditRecharge.objects.create(workspace=workspace, amount=500)

@@ -60,3 +60,21 @@ def doubao_tts(provider, text, timeout=60):
     if audio is None:
         raise ProviderError("TTS response missing audio")
     return audio if isinstance(audio, bytes) else str(audio).encode("utf-8")
+
+
+def doubao_asr(provider, asset_path, timeout=120):
+    url = os.environ.get("VOLCENGINE_ASR_URL")
+    if not url:
+        raise ProviderError("Missing provider API URL env var: VOLCENGINE_ASR_URL")
+    if not asset_path.exists():
+        raise ProviderError("ASR source asset bytes not found")
+    data = post_json(
+        url,
+        provider_api_key(provider),
+        {"audio": asset_path.read_bytes().hex(), "model": provider.model_name},
+        timeout=timeout,
+    )
+    segments = data.get("segments") or data.get("result", {}).get("segments")
+    if not isinstance(segments, list):
+        raise ProviderError("ASR response missing segments")
+    return [{"start": float(item["start"]), "end": float(item["end"]), "text": str(item["text"])[:200]} for item in segments]
