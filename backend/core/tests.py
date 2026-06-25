@@ -1,3 +1,5 @@
+import json
+import os
 from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
@@ -52,6 +54,20 @@ def make_confirmed_draft(workspace, user, script="confirmed script"):
         confirmed_at=timezone.now(),
     )
     return draft
+
+
+class FakeHttpResponse:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def read(self):
+        return json.dumps(self.payload).encode("utf-8")
 
 
 class HealthEndpointTests(TestCase):
@@ -411,6 +427,43 @@ class AIProviderTests(TestCase):
         self.assertEqual(response.json(), {"providers": []})
         self.assertEqual(job.public_payload()["capability"], AIProvider.DIGITAL_HUMAN)
         self.assertEqual(job.public_payload()["provider_id"], provider.id)
+
+
+class ProviderClientTests(TestCase):
+    def test_ark_chat_requires_configured_api_key(self):
+        provider = AIProvider.objects.create(
+            capability=AIProvider.LLM,
+            name="Ark",
+            model_name="ep-test",
+            api_key_env="MISSING_ARK_KEY",
+            enabled=True,
+        )
+        from core.provider_clients import ProviderError, ark_chat
+
+        with self.assertRaises(ProviderError) as error:
+            ark_chat(provider, [{"role": "user", "content": "写一条爆款脚本"}])
+
+        self.assertIn("MISSING_ARK_KEY", str(error.exception))
+
+    def test_ark_chat_posts_openai_compatible_payload(self):
+        provider = AIProvider.objects.create(
+            capability=AIProvider.LLM,
+            name="Ark",
+            model_name="ep-test",
+            api_key_env="ARK_API_KEY",
+            enabled=True,
+        )
+        from core import provider_clients
+
+        def fake_urlopen(request, timeout):
+            self.assertIn("/chat/completions", request.full_url)
+            self.assertEqual(request.headers["Authorization"], "Bearer test-key")
+            body = json.loads(request.data.decode("utf-8"))
+            self.assertEqual(body["model"], "ep-test")
+            return FakeHttpResponse({"choices": [{"message": {"content": "候选脚本"}}]})
+
+        with patch.dict(os.environ, {"ARK_API_KEY": "test-key"}, clear=True), patch("core.provider_clients.urlopen", side_effect=fake_urlopen):
+            self.assertEqual(provider_clients.ark_chat(provider, [{"role": "user", "content": "hi"}]), "候选脚本")
 
 
 class CustomerProfileTests(TestCase):
