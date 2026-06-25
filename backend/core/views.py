@@ -31,7 +31,7 @@ from .models import (
     Workspace,
     WorkspaceMembership,
 )
-from .provider_clients import ProviderError, ark_chat
+from .provider_clients import ProviderError, ark_chat, doubao_tts
 
 
 def health(request):
@@ -350,8 +350,24 @@ def job_voiceover(request, job_id):
                 raise ValueError
             job.voiceover_mode = Job.VOICEOVER_TTS
             job.voiceover_provider = provider
-            job.source_audio_asset = None
-            job.audio_placeholder = f"local://jobs/{job.id}/voiceover/{provider.model_name}.mp3"
+            if provider.api_key_env:
+                object_key = f"workspaces/{workspace.id}/voiceovers/{uuid.uuid4().hex}/job-{job.id}.mp3"
+                output_path = local_asset_path(object_key)
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_path.write_bytes(doubao_tts(provider, script))
+                job.source_audio_asset = Asset.objects.create(
+                    workspace=workspace,
+                    uploaded_by=user,
+                    filename=f"job-{job.id}-voiceover.mp3",
+                    content_type="audio/mpeg",
+                    asset_type=Asset.AUDIO,
+                    object_key=object_key,
+                    tags=["voiceover"],
+                )
+                job.audio_placeholder = f"local://{object_key}"
+            else:
+                job.source_audio_asset = None
+                job.audio_placeholder = f"local://jobs/{job.id}/voiceover/{provider.model_name}.mp3"
             job.subtitles = fake_subtitle_cues(script)
         elif mode == Job.VOICEOVER_ASR:
             provider = AIProvider.objects.get(id=int(data.get("provider_id")), enabled=True, capability=AIProvider.ASR)
@@ -367,6 +383,8 @@ def job_voiceover(request, job_id):
             job.subtitles = clean_subtitles(data.get("subtitles"))
     except (AIProvider.DoesNotExist, Asset.DoesNotExist, TypeError, ValueError):
         return error("Valid voiceover mode, provider, script, asset and subtitles required")
+    except ProviderError as exc:
+        return error(str(exc), status=502)
     job.save(update_fields=["voiceover_mode", "voiceover_provider", "source_audio_asset", "audio_placeholder", "subtitles", "updated_at"])
     return JsonResponse({"job": job.public_payload(), "credits": credit_payload(workspace)})
 

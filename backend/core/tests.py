@@ -941,6 +941,31 @@ class JobLifecycleTests(TestCase):
 
 
 class VoiceoverSubtitleTests(TestCase):
+    def test_tts_voiceover_creates_audio_asset_from_provider_bytes(self):
+        user, workspace = make_user_workspace()
+        CreditRecharge.objects.create(workspace=workspace, amount=500)
+        provider = AIProvider.objects.create(capability=AIProvider.TTS, name="Doubao TTS", model_name="voice", api_key_env="VOLCENGINE_SPEECH_ACCESS_TOKEN", enabled=True)
+        draft = make_confirmed_draft(workspace, user)
+        token = AuthToken.issue_for(user)
+        job = self.client.post("/api/jobs/", data={"title": "tts job", "estimated_credits": 100, "script_draft_id": draft.id}, content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {token}").json()["job"]
+
+        with patch("core.views.doubao_tts", return_value=b"mp3-bytes"):
+            response = self.client.post(
+                f"/api/jobs/{job['id']}/voiceover/",
+                data={"mode": "tts", "provider_id": provider.id, "script": "你好"},
+                content_type="application/json",
+                HTTP_AUTHORIZATION=f"Bearer {token}",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()["job"]
+        self.assertEqual(payload["voiceover_mode"], "tts")
+        self.assertIsNotNone(payload["source_audio_asset_id"])
+        self.assertTrue(payload["audio_placeholder"].endswith(".mp3"))
+        asset = Asset.objects.get(id=payload["source_audio_asset_id"])
+        self.assertEqual(asset.asset_type, Asset.AUDIO)
+        self.assertEqual((Path(settings.BASE_DIR) / "local_media" / asset.object_key).read_bytes(), b"mp3-bytes")
+
     def test_job_stores_no_voiceover_tts_subtitles_and_user_edits_subtitles(self):
         user, workspace = make_user_workspace()
         CreditRecharge.objects.create(workspace=workspace, amount=500)

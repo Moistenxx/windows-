@@ -44,3 +44,19 @@ def ark_chat(provider, messages, temperature=0.8, timeout=60):
         return data["choices"][0]["message"]["content"].strip()
     except (KeyError, IndexError, TypeError, AttributeError) as exc:
         raise ProviderError("Provider response missing chat content") from exc
+
+
+def doubao_tts(provider, text, timeout=60):
+    url = os.environ.get("VOLCENGINE_TTS_URL")
+    if not url:
+        raise ProviderError("Missing provider API URL env var: VOLCENGINE_TTS_URL")
+    data = post_json(
+        url,
+        provider_api_key(provider),
+        {"text": text, "voice_type": os.environ.get("VOLCENGINE_TTS_VOICE_TYPE", provider.model_name)},
+        timeout=timeout,
+    )
+    audio = data.get("audio") or data.get("data")
+    if audio is None:
+        raise ProviderError("TTS response missing audio")
+    return audio if isinstance(audio, bytes) else str(audio).encode("utf-8")
