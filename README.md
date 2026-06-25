@@ -32,6 +32,15 @@ Launch/download page:
 
 - Site: http://127.0.0.1:4174/
 
+## Volcengine provider env
+
+- `ARK_API_KEY`: Ark data-plane API key.
+- `ARK_BASE_URL`: optional, defaults to `https://ark.cn-beijing.volces.com/api/v3`.
+- `VOLCENGINE_SPEECH_ACCESS_TOKEN`: Doubao Speech token.
+- `VOLCENGINE_TTS_URL`: TTS API URL used by the v1 adapter.
+- `VOLCENGINE_TTS_VOICE_TYPE`: optional TTS voice type; falls back to provider `model_name`.
+- `VOLCENGINE_ASR_URL`: ASR API URL used by the v1 adapter.
+
 ## Checks
 
 ```powershell
