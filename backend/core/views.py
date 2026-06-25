@@ -462,7 +462,7 @@ def complete_render_job(job_id):
             for asset in Asset.objects.filter(id__in=source_ids, workspace=workspace, deleted_at__isnull=True).exclude(asset_type=Asset.OUTPUT)
         }
         assets = [by_id[asset_id] for asset_id in source_ids if asset_id in by_id]
-        if not assets:
+        if not assets or len(assets) != len(source_ids):
             raise ValueError("Queued render needs source_asset_ids")
         if job.status == Job.PENDING:
             job.start("export")

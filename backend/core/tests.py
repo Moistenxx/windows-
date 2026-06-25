@@ -990,6 +990,26 @@ class SingleVideoRenderTests(TestCase):
         self.assertEqual(payload["job"]["status"], "failed")
         self.assertEqual(payload["credits"], {"workspace_id": workspace.id, "balance": 200, "frozen": 0})
 
+    def test_worker_partially_missing_queued_assets_marks_job_failed_and_refunds_credits(self):
+        user, workspace = make_user_workspace()
+        CreditRecharge.objects.create(workspace=workspace, amount=200)
+        keep = Asset.objects.create(workspace=workspace, uploaded_by=user, filename="keep.mp4", content_type="video/mp4", asset_type=Asset.VIDEO, object_key="partial-keep", tags=["product"])
+        deleted = Asset.objects.create(workspace=workspace, uploaded_by=user, filename="deleted.mp4", content_type="video/mp4", asset_type=Asset.VIDEO, object_key="partial-deleted", tags=["detail"])
+        draft = make_confirmed_draft(workspace, user)
+        token = AuthToken.issue_for(user)
+        job = self.client.post("/api/jobs/", data={"title": "partial missing render", "estimated_credits": 120, "script_draft_id": draft.id}, content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {token}").json()["job"]
+        self.client.post(f"/api/jobs/{job['id']}/render/", data={"asset_ids": [keep.id, deleted.id]}, content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {token}")
+        deleted.deleted_at = timezone.now()
+        deleted.save(update_fields=["deleted_at"])
+
+        from core import views
+        with patch("core.views.run_ffmpeg_render") as render:
+            payload = views.complete_render_job(job["id"])
+
+        render.assert_not_called()
+        self.assertEqual(payload["job"]["status"], "failed")
+        self.assertEqual(payload["credits"], {"workspace_id": workspace.id, "balance": 200, "frozen": 0})
+
     def test_render_worker_processes_running_queued_jobs(self):
         user, workspace = make_user_workspace()
         CreditRecharge.objects.create(workspace=workspace, amount=200)
