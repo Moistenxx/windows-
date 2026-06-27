@@ -894,10 +894,10 @@ def split_script_candidates(text):
 def real_script_candidates(customer, template, provider, duration_seconds, samples):
     sample_text = "\n".join(f"- {sample.copy[:160]}" for sample in samples)
     prompt = (
-        f"??????????????{customer.name}??3?{duration_seconds}?????????\n"
-        f"???{customer.industry or template.industry}\n???{customer.products}\n???{customer.selling_points}\n"
-        f"????{customer.forbidden_words}\n?????\n{sample_text}\n"
-        "????? --- ?????????????????????"
+        f"你是抖音短视频爆款脚本助手。请为{customer.name}写3条{duration_seconds}秒口播文案。\n"
+        f"行业：{customer.industry or template.industry}\n产品：{customer.products}\n卖点：{customer.selling_points}\n"
+        f"禁用词：{customer.forbidden_words or '无'}\n参考爆款：\n{sample_text or '无'}\n"
+        "结构：钩子-痛点-卖点-行动。输出用 --- 分隔，只输出文案，不要解释。"
     )
     return split_script_candidates(ark_chat(provider, [{"role": "user", "content": prompt}]))
 
