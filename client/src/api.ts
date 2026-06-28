@@ -58,7 +58,7 @@ export type JobsPayload = {
   concurrency_limits: { global: number; workspace: number };
 };
 export type JobMutationPayload = { job: JobPayload; credits: CreditPayload };
-export type JobRenderPayload = JobMutationPayload;
+export type JobRenderPayload = JobMutationPayload & { output_asset?: Asset | null };
 export type BatchRemixPayload = { jobs: JobPayload[]; credits: CreditPayload };
 
 export type AiProvider = {
@@ -396,15 +396,18 @@ export async function renderJob(
   token: string,
   jobId: number,
   assetIds: number[],
-  fetcher: Fetcher = fetch,
+  syncOrFetcher: boolean | Fetcher = false,
+  maybeFetcher?: Fetcher,
 ): Promise<JobRenderPayload> {
+  const sync = typeof syncOrFetcher === "boolean" ? syncOrFetcher : false;
+  const fetcher = typeof syncOrFetcher === "function" ? syncOrFetcher : maybeFetcher ?? fetch;
   const response = await fetcher<JobRenderPayload>(apiUrl(apiBase, `/api/jobs/${jobId}/render/`), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({ asset_ids: assetIds }),
+    body: JSON.stringify(sync ? { asset_ids: assetIds, sync: true } : { asset_ids: assetIds }),
   });
   return readJson(response);
 }
@@ -505,6 +508,23 @@ export async function createAssetUpload(
       Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify({ filename, content_type: contentType }),
+  });
+  return readJson(response);
+}
+
+
+export async function uploadAssetFile(
+  apiBase: string,
+  token: string,
+  file: File,
+  fetcher: Fetcher = fetch,
+): Promise<AssetUploadPayload> {
+  const body = new FormData();
+  body.append("file", file);
+  const response = await fetcher<AssetUploadPayload>(apiUrl(apiBase, "/api/assets/"), {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body,
   });
   return readJson(response);
 }

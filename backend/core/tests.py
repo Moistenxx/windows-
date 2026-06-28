@@ -1,5 +1,7 @@
 import json
 import os
+import shutil
+import subprocess
 from base64 import b64encode
 from io import StringIO
 from pathlib import Path
@@ -8,6 +10,7 @@ from unittest.mock import patch
 from django.conf import settings
 from django.contrib import admin
 from django.contrib.auth.models import User
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
 from django.test import TestCase
 from django.urls import reverse
@@ -569,6 +572,26 @@ class CustomerProfileTests(TestCase):
 
 
 class AssetLibraryTests(TestCase):
+    def test_user_can_upload_local_file_bytes_for_render_worker(self):
+        user, workspace = make_user_workspace()
+        token = AuthToken.issue_for(user)
+        upload = SimpleUploadedFile("clip.mp4", b"real mp4 bytes", content_type="video/mp4")
+
+        response = self.client.post(
+            "/api/assets/",
+            data={"file": upload},
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        payload = response.json()
+        asset = Asset.objects.get(id=payload["asset"]["id"], workspace=workspace)
+        from core import views
+        path = views.local_asset_path(asset.object_key)
+        self.addCleanup(lambda: path.exists() and path.unlink())
+        self.assertEqual(payload["upload"]["method"], "DONE")
+        self.assertEqual(path.read_bytes(), b"real mp4 bytes")
+
     def test_user_can_create_list_and_delete_asset_upload_intent(self):
         user, workspace = make_user_workspace()
         token = AuthToken.issue_for(user)
@@ -1111,6 +1134,75 @@ class VoiceoverSubtitleTests(TestCase):
 
 
 class SingleVideoRenderTests(TestCase):
+    def test_worker_renders_real_concat_mp4_from_uploaded_files(self):
+        if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+            self.skipTest("ffmpeg and ffprobe required")
+        user, workspace = make_user_workspace()
+        CreditRecharge.objects.create(workspace=workspace, amount=500)
+        media_root = Path(settings.BASE_DIR) / "local_media" / "test-render" / str(workspace.id)
+        self.addCleanup(lambda: shutil.rmtree(media_root, ignore_errors=True))
+
+        def write_clip(name, color):
+            path = media_root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    f"color=c={color}:s=320x568:d=1",
+                    "-an",
+                    "-c:v",
+                    "libx264",
+                    "-pix_fmt",
+                    "yuv420p",
+                    str(path),
+                ],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+            )
+            return path
+
+        write_clip("red.mp4", "red")
+        write_clip("blue.mp4", "blue")
+        first = Asset.objects.create(workspace=workspace, uploaded_by=user, filename="red.mp4", content_type="video/mp4", asset_type=Asset.VIDEO, object_key=f"test-render/{workspace.id}/red.mp4", tags=["product"])
+        second = Asset.objects.create(workspace=workspace, uploaded_by=user, filename="blue.mp4", content_type="video/mp4", asset_type=Asset.VIDEO, object_key=f"test-render/{workspace.id}/blue.mp4", tags=["detail"])
+        draft = make_confirmed_draft(workspace, user, script="real render script")
+        token = AuthToken.issue_for(user)
+        job = self.client.post(
+            "/api/jobs/",
+            data={"title": "real concat render", "estimated_credits": 120, "script_draft_id": draft.id},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        ).json()["job"]
+        self.client.post(
+            f"/api/jobs/{job['id']}/render/",
+            data={"asset_ids": [first.id, second.id]},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+
+        from core import views
+        payload = views.complete_render_job(job["id"])
+
+        self.assertEqual(payload["job"]["status"], "succeeded")
+        output = Asset.objects.get(id=payload["output_asset"]["id"], workspace=workspace)
+        output_path = views.local_asset_path(output.object_key)
+        self.addCleanup(lambda: output_path.exists() and output_path.unlink())
+        self.assertGreater(output_path.stat().st_size, 10_000)
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(output_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+        )
+        self.assertGreaterEqual(float(probe.stdout.strip()), 1.8)
+
     def test_render_endpoint_queues_and_worker_creates_9_16_preview_asset(self):
         user, workspace = make_user_workspace()
         CreditRecharge.objects.create(workspace=workspace, amount=500)
@@ -1152,6 +1244,32 @@ class SingleVideoRenderTests(TestCase):
         response = self.client.get(payload["output_asset"]["preview_url"], HTTP_AUTHORIZATION=f"Bearer {token}")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response["Content-Type"], "video/mp4")
+
+    def test_render_endpoint_sync_finishes_job_and_returns_output_asset(self):
+        user, workspace = make_user_workspace()
+        CreditRecharge.objects.create(workspace=workspace, amount=500)
+        asset = Asset.objects.create(workspace=workspace, uploaded_by=user, filename="clip.mp4", content_type="video/mp4", asset_type=Asset.VIDEO, object_key="sync-clip", tags=["product"])
+        draft = make_confirmed_draft(workspace, user)
+        token = AuthToken.issue_for(user)
+        job = self.client.post("/api/jobs/", data={"title": "sync render", "estimated_credits": 120, "script_draft_id": draft.id}, content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {token}").json()["job"]
+
+        def write_output(_job, _assets, output_path):
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(b"fake mp4")
+
+        with patch("core.views.run_ffmpeg_render", side_effect=write_output):
+            response = self.client.post(
+                f"/api/jobs/{job['id']}/render/",
+                data={"asset_ids": [asset.id], "sync": True},
+                content_type="application/json",
+                HTTP_AUTHORIZATION=f"Bearer {token}",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["job"]["status"], "succeeded")
+        self.assertEqual(payload["output_asset"]["asset_type"], "output")
+        self.assertEqual(payload["credits"], {"workspace_id": workspace.id, "balance": 380, "frozen": 0})
 
     def test_worker_render_failure_marks_job_failed_and_refunds_credits(self):
         user, workspace = make_user_workspace()

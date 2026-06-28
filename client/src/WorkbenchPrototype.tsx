@@ -2,7 +2,10 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import {
   confirmScript,
-  createAssetUpload,
+  createJob,
+  fetchAssetPreviewBlob,
+  renderJob,
+  uploadAssetFile,
   defaultApiBase,
   fetchAiProviders,
   fetchAssets,
@@ -205,6 +208,7 @@ function LivePanel() {
   const [durationSeconds, setDurationSeconds] = useState(15);
   const [draft, setDraft] = useState<ScriptDraftPayload | null>(null);
   const [scriptText, setScriptText] = useState("");
+  const [rendering, setRendering] = useState(false);
   const [customerForm, setCustomerForm] = useState<CustomerProfile>({
     name: "QA服装店",
     industry: "服装",
@@ -306,13 +310,60 @@ function LivePanel() {
   async function addAsset(file: File | undefined) {
     if (!token || !file) return;
     try {
-      const payload = await createAssetUpload(apiBase, token, file.name, file.type);
+      const payload = await uploadAssetFile(apiBase, token, file);
       setAssets((items) => [payload.asset, ...items]);
-      setMessage("素材已登记，后续云端剪辑会使用素材上传地址");
+      setMessage("???????????????");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "素材上传失败");
+      setMessage(error instanceof Error ? error.message : "??????");
     }
   }
+
+  async function startRender() {
+    if (!token || !draft?.render_ready) {
+      setMessage("?????????");
+      return;
+    }
+    const sourceAssets = assets.filter((asset) => asset.asset_type === "video" || asset.asset_type === "image");
+    if (!sourceAssets.length) {
+      setMessage("???????????");
+      return;
+    }
+    setRendering(true);
+    setMessage("????????????? MP4...");
+    try {
+      const created = await createJob(apiBase, token, {
+        title: `${customerForm.name || "AI"} ????`,
+        estimatedCredits: 120,
+        scriptDraftId: draft.id,
+      });
+      const payload = await renderJob(apiBase, token, created.job.id, sourceAssets.slice(0, 8).map((asset) => asset.id), true);
+      setCredits(payload.credits);
+      setJobs((items) => [payload.job, ...items.filter((item) => item.id !== payload.job.id)]);
+      if (payload.job.status === "failed") throw new Error(payload.job.error_message || "????");
+      if (payload.output_asset) setAssets((items) => [payload.output_asset!, ...items]);
+      setMessage(payload.output_asset ? "??????????? MP4" : "???????");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "????");
+    } finally {
+      setRendering(false);
+    }
+  }
+
+  async function downloadAsset(asset: Asset) {
+    if (!token || !asset.preview_url) return;
+    try {
+      const blob = await fetchAssetPreviewBlob(apiBase, token, asset.preview_url);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = asset.filename || "ai-video.mp4";
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "????");
+    }
+  }
+
 
   if (!token) {
     return (
@@ -379,6 +430,9 @@ function LivePanel() {
       </form>
 
       {message && <p className="live-message">{message}</p>}
+      {assets.filter((asset) => asset.asset_type === "output").slice(0, 3).map((asset) => (
+        <button className="proto-secondary" type="button" key={asset.id} onClick={() => downloadAsset(asset)}>?? {asset.filename}</button>
+      ))}
 
       {draft && (
         <div className="live-results">

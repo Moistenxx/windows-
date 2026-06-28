@@ -285,7 +285,7 @@ def jobs(request):
             int(data.get("estimated_credits", 0)),
             title=str(data.get("title") or "Render job").strip()[:160],
         )
-        job.render = {"script_draft_id": draft.id, "confirmed_script": draft.confirmed_script}
+        job.render = {"script_draft_id": draft.id, "duration_seconds": draft.duration_seconds, "confirmed_script": draft.confirmed_script}
         job.save(update_fields=["render", "updated_at"])
     except (ScriptDraft.DoesNotExist, TypeError, ValueError):
         return error("Confirmed script_draft_id and positive estimated_credits required")
@@ -437,38 +437,79 @@ def rotated(items, offset):
     offset %= len(items)
     return items[offset:] + items[:offset]
 
-def render_source_args(assets):
+def render_clip_seconds(job, asset_count):
+    total = int(job.render.get("duration_seconds") or 0)
+    if not total and job.render.get("script_draft_id"):
+        total = ScriptDraft.objects.filter(id=job.render.get("script_draft_id"), workspace=job.workspace).values_list("duration_seconds", flat=True).first() or 0
+    return max(1, min(8, round(total / max(asset_count, 1)))) if total else 1
+
+
+def render_source_args(assets, clip_seconds=1):
+    args = []
+    missing = []
     for asset in assets:
         if asset.asset_type not in {Asset.VIDEO, Asset.IMAGE}:
             continue
         path = local_asset_path(asset.object_key)
         if not path.exists():
+            missing.append(asset.filename)
             continue
         if asset.asset_type == Asset.IMAGE:
-            return ["-loop", "1", "-t", "1", "-i", str(path)]
-        return ["-t", "1", "-i", str(path)]
-    # ponytail: local smoke falls back to black when OSS bytes are absent; real worker streams object storage.
-    return ["-f", "lavfi", "-i", "color=c=black:s=1080x1920:d=1"]
+            args.extend(["-loop", "1", "-t", str(clip_seconds), "-i", str(path)])
+        else:
+            args.extend(["-t", str(clip_seconds), "-i", str(path)])
+    if missing:
+        raise FileNotFoundError(f"Source asset file missing: {', '.join(missing[:3])}")
+    if not args:
+        raise ValueError("No renderable source assets")
+    return args
+
+
+def ffmpeg_filter_value(value):
+    return str(value).replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
+
+
+def drawtext_filter(text):
+    safe_text = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff ]+", " ", text).strip()[:120] or "AI video"
+    font = next((path for path in [Path("C:/Windows/Fonts/msyh.ttc"), Path("C:/Windows/Fonts/simhei.ttf")] if path.exists()), None)
+    font_arg = f":fontfile='{ffmpeg_filter_value(font)}'" if font else ""
+    return f"drawtext=text='{ffmpeg_filter_value(safe_text)}'{font_arg}:fontcolor=white:fontsize=60:x=(w-text_w)/2:y=h-240"
+
 
 def run_ffmpeg_render(job, assets, output_path):
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    text = " ".join(str(cue.get("text", "")) for cue in job.subtitles[:2]) or job.title
-    safe_text = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff ]+", " ", text).strip()[:120] or "AI video"
+    clip_seconds = render_clip_seconds(job, len(assets))
+    input_args = render_source_args(assets, clip_seconds)
+    input_count = input_args.count("-i")
+    text = " ".join(str(cue.get("text", "")) for cue in job.subtitles[:2]) or job.render.get("confirmed_script") or job.title
+    base = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30,setsar=1,setpts=PTS-STARTPTS,format=yuv420p"
+    if input_count == 1:
+        filter_complex = f"[0:v]{base},{drawtext_filter(text)}[outv]"
+    else:
+        parts = [f"[{index}:v]{base}[v{index}]" for index in range(input_count)]
+        parts.append("".join(f"[v{index}]" for index in range(input_count)) + f"concat=n={input_count}:v=1:a=0[v]")
+        parts.append(f"[v]{drawtext_filter(text)}[outv]")
+        filter_complex = ";".join(parts)
     command = [
         "ffmpeg",
         "-y",
-        *render_source_args(assets),
-        "-vf",
-        f"scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,drawtext=text='{safe_text}':fontcolor=white:fontsize=60:x=(w-text_w)/2:y=h-240",
+        *input_args,
+        "-filter_complex",
+        filter_complex,
+        "-map",
+        "[outv]",
+        "-an",
         "-c:v",
         "libx264",
         "-pix_fmt",
         "yuv420p",
+        "-movflags",
+        "+faststart",
         str(output_path),
     ]
-    result = subprocess.run(command, capture_output=True)
-    if result.returncode != 0 or not output_path.exists():
-        raise RuntimeError(result.stderr.decode("utf-8", errors="ignore")[-500:] or "ffmpeg failed")
+    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="ignore")
+    if result.returncode != 0 or not output_path.exists() or output_path.stat().st_size == 0:
+        raise RuntimeError((result.stderr or result.stdout)[-500:] or "ffmpeg failed")
     return output_path
 
 def complete_render_job(job_id):
@@ -543,6 +584,9 @@ def job_render(request, job_id):
     job.render = {**job.render, "source_asset_ids": [asset.id for asset in assets], "subtitles_burned": True}
     job.current_step = "clipping"
     job.save(update_fields=["render", "current_step", "updated_at"])
+    if data.get("sync"):
+        payload = complete_render_job(job.id)
+        return JsonResponse(payload, status=200)
     return JsonResponse({"job": job.public_payload(), "credits": credit_payload(workspace)}, status=202)
 
 @csrf_exempt
@@ -790,6 +834,35 @@ def assets(request):
         return JsonResponse({"assets": [asset.public_payload() for asset in rows]})
     if request.method != "POST":
         return error("GET or POST required", status=405)
+    upload = request.FILES.get("file")
+    if upload:
+        filename = str(upload.name or "asset").strip()
+        content_type = str(upload.content_type or "").strip().lower()
+        try:
+            asset_type = asset_type_for(filename, content_type)
+        except ValueError as exc:
+            return error(str(exc))
+        suggested_tags = suggested_tags_for_upload(filename)
+        asset = Asset.objects.create(
+            workspace=workspace,
+            uploaded_by=user,
+            filename=PurePath(filename).name[:240] or "asset",
+            content_type=content_type,
+            asset_type=asset_type,
+            object_key=Asset.new_object_key(workspace, filename),
+            suggested_tags=suggested_tags,
+            tags=suggested_tags,
+        )
+        path = local_asset_path(asset.object_key)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("wb") as target:
+                for chunk in upload.chunks():
+                    target.write(chunk)
+        except OSError as exc:
+            asset.delete()
+            return error(f"Upload save failed: {exc}", status=500)
+        return JsonResponse({"asset": asset.public_payload(), "upload": {"method": "DONE", "url": asset.public_payload()["preview_url"], "headers": {}}}, status=201)
     data = read_json(request)
     filename = str(data.get("filename") or "").strip()
     content_type = str(data.get("content_type") or "").strip().lower()

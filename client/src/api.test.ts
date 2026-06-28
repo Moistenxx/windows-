@@ -1,8 +1,9 @@
-﻿import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   estimateAiCredits,
   createAssetUpload,
+  uploadAssetFile,
   deleteAsset,
   contentTypeFor,
   fetchAiProviders,
@@ -457,5 +458,39 @@ describe("batch remix API helpers", () => {
       body: JSON.stringify({ asset_ids: [7, 8], variants: 2, estimated_credits: 50, script_draft_id: 9 }),
     });
     expect(result.jobs).toHaveLength(2);
+  });
+});
+
+describe("real asset upload and sync render helpers", () => {
+  it("uploads file bytes as multipart without faking a local upload URL", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ asset: { id: 1, filename: "clip.mp4" }, upload: { method: "DONE", url: "/api/assets/1/preview/", headers: {} } }),
+    });
+    const file = new File(["bytes"], "clip.mp4", { type: "video/mp4" });
+
+    const payload = await uploadAssetFile("http://127.0.0.1:8000", "abc", file, fetchMock);
+
+    expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:8000/api/assets/", {
+      method: "POST",
+      headers: { Authorization: "Bearer abc" },
+      body: expect.any(FormData),
+    });
+    expect(payload.upload.method).toBe("DONE");
+  });
+
+  it("can ask render endpoint to finish synchronously for the desktop MVP", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ job: { id: 1, status: "succeeded" }, output_asset: { id: 9 }, credits: { balance: 1, frozen: 0 } }),
+    });
+
+    await renderJob("http://127.0.0.1:8000", "abc", 1, [7, 8], true, fetchMock);
+
+    expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:8000/api/jobs/1/render/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer abc" },
+      body: JSON.stringify({ asset_ids: [7, 8], sync: true }),
+    });
   });
 });
