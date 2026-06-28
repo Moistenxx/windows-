@@ -1,10 +1,40 @@
+import { FormEvent, useEffect, useMemo, useState } from "react";
+
+import {
+  confirmScript,
+  createAssetUpload,
+  defaultApiBase,
+  fetchAiProviders,
+  fetchAssets,
+  fetchCredits,
+  fetchCustomers,
+  fetchJobs,
+  fetchMe,
+  fetchScriptAssets,
+  generateScripts,
+  login,
+  registerWithInvite,
+  saveCustomer,
+  type AiProvider,
+  type Asset,
+  type CreditPayload,
+  type CustomerProfile,
+  type IndustryTemplate,
+  type JobPayload,
+  type ScriptDraftPayload,
+} from "./api";
 import "./prototype.css";
 
-const modules = [
-  ["爆款文案", "按平台、行业、时长生成 3 条候选脚本", "已接火山"],
-  ["AI 一键成片", "素材上传后自动拆分镜、配音、字幕、剪辑", "规划中"],
-  ["爆款复刻", "粘贴抖音链接，提取结构并生成同款脚本", "接口预留"],
-  ["批量混剪", "同一脚本批量换素材、换钩子、换封面", "队列就绪"],
+const apiBase = import.meta.env.VITE_API_BASE_URL || defaultApiBase;
+const tokenKey = "ai-video-workbench-token";
+
+const modules: Array<[string, string, string, boolean]> = [
+  ["爆款文案", "按平台、行业、时长生成 3 条候选脚本", "可用", true],
+  ["素材库", "上传素材并进入后续剪辑任务", "可用", true],
+  ["任务队列", "查看脚本确认后的制作任务", "可用", true],
+  ["AI 一键成片", "自动配音、字幕、剪辑、导出", "未接入", false],
+  ["爆款复刻", "粘贴抖音链接，提取结构并生成同款脚本", "未接入", false],
+  ["批量混剪", "同一脚本批量换素材、换钩子、换封面", "未接入", false],
 ];
 
 const scripts = [
@@ -72,6 +102,8 @@ export function WorkbenchPrototype() {
 function CockpitView() {
   return (
     <>
+      <LivePanel />
+
       <section className="proto-metrics">
         {[
           ["今日脚本", "128", "+34%"],
@@ -93,12 +125,12 @@ function CockpitView() {
             <span>功能入口</span>
             <strong>选择你今天要生产什么</strong>
           </div>
-          {modules.map(([title, text, badge]) => (
-            <button className="module-tile" key={title}>
+          {modules.map(([title, text, badge, enabled]) => (
+            <a className={`module-tile ${enabled ? "" : "disabled"}`} href={enabled ? "#live-panel" : undefined} key={title}>
               <span>{badge}</span>
               <strong>{title}</strong>
               <small>{text}</small>
-            </button>
+            </a>
           ))}
         </article>
 
@@ -151,6 +183,220 @@ function CockpitView() {
         </article>
       </section>
     </>
+  );
+}
+
+function LivePanel() {
+  const [token, setToken] = useState(() => localStorage.getItem(tokenKey) || "");
+  const [email, setEmail] = useState(() => `qa-${Date.now()}@example.com`);
+  const [password, setPassword] = useState("Password123!");
+  const [inviteCode, setInviteCode] = useState("ALPHA-1");
+  const [mode, setMode] = useState<"login" | "register">("register");
+  const [message, setMessage] = useState("");
+  const [userEmail, setUserEmail] = useState("");
+  const [credits, setCredits] = useState<CreditPayload | null>(null);
+  const [providers, setProviders] = useState<AiProvider[]>([]);
+  const [customers, setCustomers] = useState<CustomerProfile[]>([]);
+  const [templates, setTemplates] = useState<IndustryTemplate[]>([]);
+  const [jobs, setJobs] = useState<JobPayload[]>([]);
+  const [assets, setAssets] = useState<Asset[]>([]);
+  const [selectedProviderId, setSelectedProviderId] = useState<number | null>(null);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<number | null>(null);
+  const [durationSeconds, setDurationSeconds] = useState(15);
+  const [draft, setDraft] = useState<ScriptDraftPayload | null>(null);
+  const [scriptText, setScriptText] = useState("");
+  const [customerForm, setCustomerForm] = useState<CustomerProfile>({
+    name: "QA服装店",
+    industry: "服装",
+    products: "夏季显瘦连衣裙",
+    target_audience: "25-35岁女性",
+    selling_points: "显瘦、透气、不挑身材",
+    forbidden_words: "全网最低,绝对",
+  });
+
+  const llmProviders = useMemo(() => providers.filter((provider) => provider.capability === "llm"), [providers]);
+
+  useEffect(() => {
+    if (!token) return;
+    void loadWorkspace(token);
+  }, [token]);
+
+  async function loadWorkspace(nextToken = token) {
+    if (!nextToken) return;
+    try {
+      const [me, creditPayload, providerPayload, customerPayload, scriptAssetPayload, jobPayload, assetPayload] = await Promise.all([
+        fetchMe(apiBase, nextToken),
+        fetchCredits(apiBase, nextToken),
+        fetchAiProviders(apiBase, nextToken),
+        fetchCustomers(apiBase, nextToken),
+        fetchScriptAssets(apiBase, nextToken),
+        fetchJobs(apiBase, nextToken),
+        fetchAssets(apiBase, nextToken),
+      ]);
+      setUserEmail(me.user.email);
+      setCredits(creditPayload);
+      setProviders(providerPayload.providers);
+      setCustomers(customerPayload.customers);
+      setTemplates(scriptAssetPayload.templates);
+      setJobs(jobPayload.jobs);
+      setAssets(assetPayload.assets);
+      setSelectedProviderId(providerPayload.providers.find((provider) => provider.capability === "llm")?.id ?? null);
+      setSelectedTemplateId(scriptAssetPayload.templates[0]?.id ?? null);
+      if (customerPayload.customers[0]) setCustomerForm(customerPayload.customers[0]);
+      setMessage("真实工作台数据已同步");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "数据加载失败");
+    }
+  }
+
+  async function submitAuth(event: FormEvent) {
+    event.preventDefault();
+    setMessage("正在进入工作台...");
+    try {
+      const payload = mode === "register"
+        ? await registerWithInvite(apiBase, { email, password, inviteCode })
+        : await login(apiBase, email, password);
+      localStorage.setItem(tokenKey, payload.token);
+      setToken(payload.token);
+      setUserEmail(payload.user.email);
+      setMessage("登录成功，正在加载真实功能");
+      await loadWorkspace(payload.token);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "登录失败");
+    }
+  }
+
+  async function submitScript(event: FormEvent) {
+    event.preventDefault();
+    if (!token || !selectedProviderId || !selectedTemplateId) {
+      setMessage("请先登录，并选择模型和模板");
+      return;
+    }
+    setMessage("正在保存客户资料...");
+    try {
+      const customer = await saveCustomer(apiBase, token, customerForm);
+      setCustomers((items) => [customer, ...items.filter((item) => item.id !== customer.id)]);
+      setMessage("正在调用火山方舟生成爆款文案...");
+      const nextDraft = await generateScripts(apiBase, token, {
+        customerId: customer.id!,
+        templateId: selectedTemplateId,
+        providerId: selectedProviderId,
+        durationSeconds,
+        sampleIds: [],
+      });
+      setDraft(nextDraft);
+      setScriptText(nextDraft.candidates[0] ?? "");
+      setMessage("已生成 3 条候选脚本");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "脚本生成失败");
+    }
+  }
+
+  async function confirmDraft() {
+    if (!token || !draft || !scriptText.trim()) return;
+    try {
+      const confirmed = await confirmScript(apiBase, token, draft.id, scriptText);
+      setDraft(confirmed);
+      setMessage("脚本已确认，可以进入视频制作任务");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "确认脚本失败");
+    }
+  }
+
+  async function addAsset(file: File | undefined) {
+    if (!token || !file) return;
+    try {
+      const payload = await createAssetUpload(apiBase, token, file.name, file.type);
+      setAssets((items) => [payload.asset, ...items]);
+      setMessage("素材已登记，后续云端剪辑会使用素材上传地址");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "素材上传失败");
+    }
+  }
+
+  if (!token) {
+    return (
+      <section className="proto-card live-panel" id="live-panel">
+        <div className="section-title">
+          <span>真实功能入口</span>
+          <strong>先登录，再使用火山方舟生成文案</strong>
+        </div>
+        <form className="live-form" onSubmit={submitAuth}>
+          <div className="mode-row">
+            <button type="button" className={mode === "register" ? "active" : ""} onClick={() => setMode("register")}>注册</button>
+            <button type="button" className={mode === "login" ? "active" : ""} onClick={() => setMode("login")}>登录</button>
+          </div>
+          <input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="邮箱" />
+          <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="密码" />
+          {mode === "register" && <input value={inviteCode} onChange={(event) => setInviteCode(event.target.value)} placeholder="邀请码" />}
+          <button className="proto-primary">进入真实工作台</button>
+          {message && <p>{message}</p>}
+        </form>
+      </section>
+    );
+  }
+
+  return (
+    <section className="proto-card live-panel" id="live-panel">
+      <div className="section-title">
+        <span>真实可用工作台</span>
+        <strong>{userEmail || "已登录"} · 火山文案主链路</strong>
+      </div>
+
+      <div className="live-status-grid">
+        <span>积分：{credits ? `${credits.balance} 可用 / ${credits.frozen} 冻结` : "加载中"}</span>
+        <span>模型：{llmProviders.find((provider) => provider.id === selectedProviderId)?.name || "未选择"}</span>
+        <span>客户：{customers.length}</span>
+        <span>任务：{jobs.length}</span>
+        <span>素材：{assets.length}</span>
+      </div>
+
+      <form className="live-workbench" onSubmit={submitScript}>
+        <div className="live-form">
+          <input value={customerForm.name} onChange={(event) => setCustomerForm({ ...customerForm, name: event.target.value })} placeholder="客户/品牌名称" />
+          <input value={customerForm.industry ?? ""} onChange={(event) => setCustomerForm({ ...customerForm, industry: event.target.value })} placeholder="行业" />
+          <input value={customerForm.products ?? ""} onChange={(event) => setCustomerForm({ ...customerForm, products: event.target.value })} placeholder="产品/服务" />
+          <input value={customerForm.target_audience ?? ""} onChange={(event) => setCustomerForm({ ...customerForm, target_audience: event.target.value })} placeholder="目标人群" />
+          <input value={customerForm.selling_points ?? ""} onChange={(event) => setCustomerForm({ ...customerForm, selling_points: event.target.value })} placeholder="核心卖点" />
+          <input value={customerForm.forbidden_words ?? ""} onChange={(event) => setCustomerForm({ ...customerForm, forbidden_words: event.target.value })} placeholder="禁用词" />
+        </div>
+
+        <div className="live-form">
+          <select value={selectedTemplateId ?? ""} onChange={(event) => setSelectedTemplateId(Number(event.target.value))}>
+            {templates.map((template) => <option key={template.id} value={template.id}>{template.industry || "通用"} · {template.name}</option>)}
+          </select>
+          <select value={selectedProviderId ?? ""} onChange={(event) => setSelectedProviderId(Number(event.target.value))}>
+            {llmProviders.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} · {provider.model_name}</option>)}
+          </select>
+          <select value={durationSeconds} onChange={(event) => setDurationSeconds(Number(event.target.value))}>
+            <option value={15}>15 秒</option>
+            <option value={30}>30 秒</option>
+            <option value={60}>60 秒</option>
+          </select>
+          <button className="proto-primary">真实生成爆款文案</button>
+          <label className="upload-button">上传素材<input type="file" onChange={(event) => addAsset(event.target.files?.[0])} /></label>
+        </div>
+      </form>
+
+      {message && <p className="live-message">{message}</p>}
+
+      {draft && (
+        <div className="live-results">
+          <div>
+            {draft.candidates.map((candidate, index) => (
+              <button className="script-candidate" type="button" key={candidate} onClick={() => setScriptText(candidate)}>
+                <b>候选 {index + 1}</b>
+                <span>{candidate}</span>
+              </button>
+            ))}
+          </div>
+          <div className="live-form">
+            <textarea value={scriptText} onChange={(event) => setScriptText(event.target.value)} rows={8} />
+            <button className="proto-secondary" type="button" onClick={confirmDraft}>{draft.render_ready ? "已确认，可进入制作" : "确认脚本"}</button>
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 
